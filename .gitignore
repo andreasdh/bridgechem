@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.eggs/
+
+# numba cache
+__pycache__/
+*.nbc
+*.nbi
+
+# tooling
+.pytest_cache/
+.ipynb_checkpoints/
+.venv/
+venv/
