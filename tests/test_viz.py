@@ -19,7 +19,7 @@ def _trajectory(N=60, size=(20, 20), steps=2000, sample_every=100, seed=0,
                **box_kwargs):
     system = bc.box(N=N, size=size, temperature=300, seed=seed, **box_kwargs)
     dt = system._auto_dt()
-    traj_pos, traj_vel, times, impulse = kernels._simulate(
+    traj_pos, traj_vel, times, impulse, virial = kernels._simulate(
         system.pos, system.vel, system.radius, system.inv_mass,
         system.Lx, system.Ly, dt, steps, sample_every, system.periodic,
     )

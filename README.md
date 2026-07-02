@@ -50,7 +50,7 @@ computed from the real SI dynamics regardless of `speed`).
 
 ```python
 sim.histogram("speeds")                  # compare with Maxwell-Boltzmann
-sim.calculate("pressure")                # 2D pressure (N/m) from wall collisions
+sim.calculate("pressure")                # 2D pressure (N/m) -- see "Pressure" below
 sim.calculate("temperature")             # per-frame temperature (K)
 sim.show()                               # replay the recorded run, with controls
 sim.show(color_by="mass", display_scale=1.5)  # colour by mass, bigger particles
@@ -78,6 +78,17 @@ couple of chemistry-friendly *input* units, converted to SI immediately:
 | `mass`       | amu  |
 | `temperature`| K    |
 
+## Pressure
+
+`sim.calculate("pressure", method=...)` supports three methods, each teaching
+something different about where "pressure" comes from:
+
+| `method`     | How it's computed | Needs | Notes |
+|--------------|--------------------|-------|-------|
+| `"wall"`     | Momentum transferred to the container walls per unit time and length -- literally what a pressure gauge on the wall would read. | reflective boundaries | Default for reflective boxes; raises a clear error on a periodic box instead of silently returning zero. |
+| `"virial"`   | The Clausius virial theorem from particle-particle collisions: `P = [N k_B T + virial_term] / A`. | works either way | Default for periodic boxes (the only one that works there); should agree with `"wall"` for a reflective box -- two independent measurements of the same physical pressure. |
+| `"ideal"`    | The textbook estimate `P = N k_B T / A`. | nothing | A theoretical reference, not a measurement -- ignores particle size and collisions entirely. Same as `sim.ideal_gas_pressure()`. |
+
 ## What milestone 1 covers
 
 - A 2D box of hard spheres with **reflective** (default) or **periodic** walls.
@@ -90,11 +101,11 @@ couple of chemistry-friendly *input* units, converted to SI immediately:
   (`color_by="mass"`, after `system.set_mass(...)`).
 - `system.set_mass(mass, indices=...)` to build a mixture -- e.g. a light/heavy
   pair to watch differential collision behaviour.
-- Velocities initialised from Maxwell–Boltzmann, or all at the same speed to
-  watch a distribution *relax* to equilibrium.
-- Analysis: speeds, temperature, kinetic energy, and pressure (with the 2D
-  ideal-gas law `P = N k_B T / A` for comparison — larger particles read a bit
-  high, the excluded-area effect of finite size, real physics).
+- Velocities initialised from Maxwell–Boltzmann, or all at the same speed
+  (`velocity_init="uniform_speed"`) to watch a distribution relax under collisions.
+- Analysis: speeds, temperature, kinetic energy, and pressure via three methods
+  (see "Pressure" above) -- larger particles read a bit high, the excluded-area
+  effect of finite size, real physics.
 - Reference gases: argon, helium, neon, krypton, xenon.
 
 See [`examples/demo.ipynb`](examples/demo.ipynb) for a guided tour.

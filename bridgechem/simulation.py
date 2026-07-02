@@ -14,14 +14,18 @@ import numpy as np
 
 from . import analysis, viz
 
+PRESSURE_METHODS = ("wall", "virial", "ideal")
+
 
 class Simulation:
-    def __init__(self, traj_pos, traj_vel, times, impulse, *, mass, radius,
-                 Lx, Ly, dim=2, periodic=False, display_scale=1.0):
+    def __init__(self, traj_pos, traj_vel, times, impulse, virial=0.0, *,
+                 mass, radius, Lx, Ly, dim=2, periodic=False,
+                 display_scale=1.0):
         self.pos = np.asarray(traj_pos)          # (n_frames, N, 2), m
         self.vel = np.asarray(traj_vel)          # (n_frames, N, 2), m/s
         self.times = np.asarray(times)           # (n_frames,), s
         self.impulse = np.asarray(impulse)       # (2,), kg*m/s
+        self.virial = float(virial)              # kg*m**2/s, see analysis.pressure_virial
         self.mass = np.asarray(mass)             # (N,), kg
         self.radius = np.asarray(radius)         # (N,), m
         self.Lx = float(Lx)
@@ -48,11 +52,14 @@ class Simulation:
         return float(self.times[-1]) if self.times.size else 0.0
 
     # -- analysis -----------------------------------------------------------
-    def calculate(self, quantity: str):
+    def calculate(self, quantity: str, method: str = None):
         """Compute a derived quantity from the trajectory.
 
         Supported: ``velocities``, ``speeds``, ``temperature``,
         ``kinetic_energy``, ``pressure``, ``mean_speed``.
+
+        For ``"pressure"``, ``method`` picks *how* it's computed -- see
+        :meth:`pressure` for the physics behind each option.
         """
         q = quantity.lower()
         if q in ("velocities", "velocity"):
@@ -64,14 +71,57 @@ class Simulation:
         if q in ("kinetic_energy", "ke", "energy"):
             return analysis.kinetic_energy(self.vel, self.mass)
         if q == "pressure":
-            return analysis.pressure(self.impulse, self.total_time,
-                                     self.Lx, self.Ly)
+            return self.pressure(method=method)
         if q == "mean_speed":
             return float(np.mean(analysis.speeds(self.vel)))
         raise ValueError(
             f"Unknown quantity {quantity!r}. Try: velocities, speeds, "
             "temperature, kinetic_energy, pressure, mean_speed."
         )
+
+    def pressure(self, method: str = None) -> float:
+        """2D pressure (N/m), computed one of three ways.
+
+        method="wall"
+            Momentum transferred to the container walls per unit time and
+            length -- literally what a pressure gauge on the wall would read.
+            Needs **reflective** boundaries (raises otherwise: with periodic
+            boundaries nothing ever touches a wall).
+        method="virial"
+            The Clausius virial theorem applied to particle-particle
+            collisions: P = [N k_B T + (virial term from collisions)] / A.
+            Works for reflective *or* periodic boundaries. For a reflective
+            box this should agree with ``method="wall"`` -- two independent
+            ways of measuring the same physical pressure, a good sanity check.
+        method="ideal"
+            The textbook ideal-gas estimate P = N k_B T / A. A theoretical
+            reference, not a measurement from the dynamics (ignores particle
+            size and collisions entirely) -- see also :meth:`ideal_gas_pressure`.
+
+        Default: ``"wall"`` for reflective boundaries, ``"virial"`` for
+        periodic (the only one that works there).
+        """
+        if method is None:
+            method = "virial" if self.periodic else "wall"
+        if method not in PRESSURE_METHODS:
+            raise ValueError(f"method must be one of {PRESSURE_METHODS}")
+        if method == "wall":
+            if self.periodic:
+                raise ValueError(
+                    "method='wall' needs reflective walls to measure "
+                    "momentum transfer -- this box is periodic, so nothing "
+                    "ever touches a wall. Use method='virial' instead (or "
+                    "method='ideal' for the theoretical estimate)."
+                )
+            return analysis.pressure_wall(self.impulse, self.total_time,
+                                          self.Lx, self.Ly)
+        if method == "virial":
+            temperature_K = float(np.mean(self.calculate("temperature")))
+            return analysis.pressure_virial(
+                self.n_particles, temperature_K, self.area, self.virial,
+                self.total_time, dim=self.dim,
+            )
+        return self.ideal_gas_pressure()  # method == "ideal"
 
     def ideal_gas_pressure(self, temperature_K=None) -> float:
         """Reference 2D ideal-gas pressure for comparison with ``calculate('pressure')``."""

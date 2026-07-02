@@ -37,14 +37,22 @@ def temperature(velocities: np.ndarray, mass: np.ndarray, dim: int = 2) -> np.nd
     return mean_m_v2 / (dim * K_B)
 
 
-def pressure(impulse: np.ndarray, total_time: float, Lx: float, Ly: float) -> float:
-    """2D pressure (force per unit length, N/m) from accumulated wall impulse.
+def pressure_wall(impulse: np.ndarray, total_time: float, Lx: float,
+                  Ly: float) -> float:
+    """"wall" method: 2D pressure (N/m) from momentum transferred to the walls.
 
-    ``impulse`` = total momentum transferred to [x-walls, y-walls] over the run.
-    Each pair of opposite walls has combined length 2*L_perp, so the pressure on
-    the x-walls is impulse_x / (total_time * 2 * Ly), and similarly for y. We
-    average the two for an isotropic estimate. For a dilute gas this matches the
-    2D ideal-gas law P = N k_B T / A.
+    This is the most direct, operational definition of pressure -- literally
+    what a pressure gauge mounted on the container wall would read: force per
+    unit length = (momentum delivered) / (time x wall length).
+
+    ``impulse`` = total momentum transferred to [x-walls, y-walls] over the
+    run. Each pair of opposite walls has combined length 2*L_perp, so the
+    pressure on the x-walls is impulse_x / (total_time * 2 * Ly), and
+    similarly for y; we average the two for an isotropic estimate.
+
+    Only meaningful for **reflective** boundaries -- with periodic boundaries
+    particles never touch a wall, so ``impulse`` stays zero and this method
+    cannot be used (see :func:`pressure_virial` instead).
     """
     if total_time <= 0.0:
         return 0.0
@@ -53,9 +61,44 @@ def pressure(impulse: np.ndarray, total_time: float, Lx: float, Ly: float) -> fl
     return 0.5 * (p_x + p_y)
 
 
+def pressure_virial(n_particles: int, temperature_K: float, area: float,
+                    virial: float, total_time: float, dim: int = 2) -> float:
+    """"virial" method: 2D pressure (N/m) from the Clausius virial theorem.
+
+        P = [N k_B T + (1/dim) <sum_{collisions} r_ij . impulse_ij> / t] / A
+
+    The kinetic (ideal-gas) term N k_B T / A is corrected by the time-averaged
+    virial of the collisional forces: every particle-particle collision
+    delivers an impulse along the line connecting the two centres, so its
+    contribution to the sum is exactly ``|r_ij| * impulse``, which is what
+    :func:`bridgechem.kernels._resolve_collisions` accumulates into
+    ``virial``. Collisions are always repulsive here, so this term is always
+    >= 0 -- finite-size particles exclude area from each other and therefore
+    raise the pressure above the ideal-gas value (like a hard-disk/van der
+    Waals gas).
+
+    Unlike :func:`pressure_wall`, this needs no walls at all: it works
+    identically for reflective *and* periodic boundaries, which is why it's
+    the standard technique for periodic (wall-less) molecular dynamics. For a
+    reflective box the two methods measure the same physical pressure by two
+    independent routes and should agree -- a good sanity check on a
+    simulation.
+    """
+    if total_time <= 0.0:
+        return 0.0
+    ideal_term = n_particles * K_B * temperature_K
+    virial_term = virial / (dim * total_time)
+    return (ideal_term + virial_term) / area
+
+
 def ideal_gas_pressure(n_particles: int, temperature_K: float,
                        area: float) -> float:
-    """2D ideal-gas pressure P = N k_B T / A (N/m)."""
+    """"ideal" method: the textbook ideal-gas estimate P = N k_B T / A (N/m).
+
+    A theoretical reference value, not something measured from the dynamics
+    (it ignores particle size and all collisions) -- useful as a baseline to
+    compare :func:`pressure_wall` / :func:`pressure_virial` against.
+    """
     return n_particles * K_B * temperature_K / area
 
 

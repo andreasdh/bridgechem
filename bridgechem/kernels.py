@@ -14,7 +14,12 @@ Conventions used throughout:
 * ``Lx``, ``Ly`` are the box side lengths in metres.
 * ``periodic`` is a bool: wrap-around (True) or reflective walls (False).
 * wall impulse is accumulated as ``[|p| transferred at x-walls, at y-walls]``
-  in kg*m/s and later turned into a pressure.
+  in kg*m/s -- turned into the "wall" pressure.
+* the collisional virial ``sum(|r_ij| * impulse_ij)`` over all particle-particle
+  collisions is accumulated as a length-1 array, in kg*m**2/s -- turned into
+  the "virial" pressure (see :mod:`bridgechem.analysis`). Both give the same
+  answer for a box with reflective walls; only virial works for periodic
+  boundaries, since there are no walls to measure momentum transfer at.
 """
 
 from __future__ import annotations
@@ -86,12 +91,16 @@ def _apply_boundaries(pos, vel, radius, inv_mass, Lx, Ly, periodic, impulse):
 
 
 @njit
-def _resolve_collisions(pos, vel, radius, inv_mass, Lx, Ly, periodic):
+def _resolve_collisions(pos, vel, radius, inv_mass, Lx, Ly, periodic, virial):
     """Detect overlapping pairs and resolve them as elastic collisions.
 
     O(N^2). Momentum and kinetic energy are conserved exactly per collision
     (restitution coefficient e = 1). Overlapping pairs are also nudged apart to
     avoid particles sticking together at higher densities.
+
+    Accumulates the collisional virial ``sum(|r_ij| * impulse)`` into
+    ``virial[0]`` -- the impulse is exchanged along the line of centres
+    (frictionless hard spheres), so ``r_ij . impulse_ij = dist * imp`` exactly.
     """
     N = pos.shape[0]
     for i in range(N):
@@ -123,6 +132,7 @@ def _resolve_collisions(pos, vel, radius, inv_mass, Lx, Ly, periodic):
                     vel[i, 1] += imp * inv_mass[i] * ny
                     vel[j, 0] -= imp * inv_mass[j] * nx
                     vel[j, 1] -= imp * inv_mass[j] * ny
+                    virial[0] += dist * imp
                 # positional de-overlap (does not change velocities/energy)
                 overlap = rsum - dist
                 if overlap > 0.0:
@@ -134,14 +144,14 @@ def _resolve_collisions(pos, vel, radius, inv_mass, Lx, Ly, periodic):
 
 
 @njit
-def _step(pos, vel, radius, inv_mass, Lx, Ly, dt, periodic, impulse):
+def _step(pos, vel, radius, inv_mass, Lx, Ly, dt, periodic, impulse, virial):
     """Advance the system by a single time step, in place."""
     N = pos.shape[0]
     for i in range(N):
         pos[i, 0] += vel[i, 0] * dt
         pos[i, 1] += vel[i, 1] * dt
     _apply_boundaries(pos, vel, radius, inv_mass, Lx, Ly, periodic, impulse)
-    _resolve_collisions(pos, vel, radius, inv_mass, Lx, Ly, periodic)
+    _resolve_collisions(pos, vel, radius, inv_mass, Lx, Ly, periodic, virial)
     if not periodic:
         # de-overlap can nudge a particle past a wall; clamp back inside
         # (position only, so velocities/energy/pressure are unaffected).
@@ -174,9 +184,11 @@ def _simulate(pos, vel, radius, inv_mass, Lx, Ly, dt, n_steps, sample_every,
               periodic):
     """Run ``n_steps`` steps, recording the state every ``sample_every`` steps.
 
-    Returns (traj_pos, traj_vel, times, impulse) where the trajectory arrays
-    have shape ``(n_frames, N, 2)``. ``impulse`` is the total momentum handed
-    to the x- and y-walls over the whole run (used to compute pressure).
+    Returns ``(traj_pos, traj_vel, times, impulse, virial)`` where the
+    trajectory arrays have shape ``(n_frames, N, 2)``. ``impulse`` is the total
+    momentum handed to the x- and y-walls over the whole run, and ``virial``
+    the collisional virial sum -- see :mod:`bridgechem.analysis` for how each
+    turns into a pressure.
     """
     N = pos.shape[0]
     n_frames = n_steps // sample_every + 1
@@ -184,6 +196,7 @@ def _simulate(pos, vel, radius, inv_mass, Lx, Ly, dt, n_steps, sample_every,
     traj_vel = np.empty((n_frames, N, 2))
     times = np.empty(n_frames)
     impulse = np.zeros(2)
+    virial = np.zeros(1)
 
     traj_pos[0] = pos
     traj_vel[0] = vel
@@ -191,11 +204,11 @@ def _simulate(pos, vel, radius, inv_mass, Lx, Ly, dt, n_steps, sample_every,
     frame = 1
 
     for step in range(1, n_steps + 1):
-        _step(pos, vel, radius, inv_mass, Lx, Ly, dt, periodic, impulse)
+        _step(pos, vel, radius, inv_mass, Lx, Ly, dt, periodic, impulse, virial)
         if step % sample_every == 0 and frame < n_frames:
             traj_pos[frame] = pos
             traj_vel[frame] = vel
             times[frame] = step * dt
             frame += 1
 
-    return traj_pos[:frame], traj_vel[:frame], times[:frame], impulse
+    return traj_pos[:frame], traj_vel[:frame], times[:frame], impulse, virial[0]

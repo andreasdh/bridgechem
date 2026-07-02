@@ -194,9 +194,10 @@ class Box:
             dt = self._auto_dt()
         self.last_dt = dt
         impulse = np.zeros(2)
+        virial = np.zeros(1)
         for _ in range(int(steps)):
             kernels._step(self.pos, self.vel, self.radius, self.inv_mass,
-                          self.Lx, self.Ly, dt, self.periodic, impulse)
+                          self.Lx, self.Ly, dt, self.periodic, impulse, virial)
         return self
 
     # ``integrate`` is kept as an alias so the loop sketch in the design notes
@@ -269,7 +270,7 @@ class Box:
             if steps // sample_every + 1 > viz.MAX_FRAMES:
                 sample_every = max(sample_every, -(-steps // viz.MAX_FRAMES))
 
-        traj_pos, traj_vel, times, impulse = kernels._simulate(
+        traj_pos, traj_vel, times, impulse, virial = kernels._simulate(
             self.pos, self.vel, self.radius, self.inv_mass,
             self.Lx, self.Ly, dt, steps, sample_every, self.periodic,
         )
@@ -278,7 +279,7 @@ class Box:
         self.vel = traj_vel[-1].copy()
 
         sim = Simulation(
-            traj_pos, traj_vel, times, impulse,
+            traj_pos, traj_vel, times, impulse, virial,
             mass=self.mass, radius=self.radius, Lx=self.Lx, Ly=self.Ly,
             dim=self.dim, periodic=self.periodic,
             display_scale=display_scale if display_scale is not None else self.display_scale,

@@ -51,6 +51,45 @@ def test_finite_size_raises_pressure():
     assert z_dense > z_dilute > 0.95
 
 
+def test_wall_and_virial_pressure_agree_reflective():
+    # two independent measurements of the same physical pressure should
+    # roughly agree (a few percent discretization-driven discrepancy is
+    # expected: collisions are detected a step after exact contact).
+    system = bc.box(N=250, size=(35, 35), temperature=300, packing=0.10, seed=0)
+    sim = system.run(steps=20000, animate=False)
+    p_wall = sim.calculate("pressure", method="wall")
+    p_virial = sim.calculate("pressure", method="virial")
+    assert 0.85 < p_virial / p_wall < 1.15
+    assert sim.calculate("pressure") == p_wall  # default for reflective
+
+
+def test_wall_pressure_raises_for_periodic():
+    system = bc.box(N=100, size=(30, 30), boundary="periodic", seed=0)
+    sim = system.run(steps=2000, animate=False)
+    with pytest.raises(ValueError):
+        sim.calculate("pressure", method="wall")
+
+
+def test_virial_pressure_works_for_periodic_and_matches_reflective_bulk():
+    # bulk pressure of a homogeneous gas shouldn't depend on whether the
+    # boundary happens to be a wall or periodic -- both measure the same
+    # density/temperature via the virial (only "wall" needs an actual wall).
+    common = dict(N=250, size=(35, 35), temperature=300, packing=0.10, seed=0)
+    reflective = bc.box(boundary="reflective", **common).run(steps=20000, animate=False)
+    periodic = bc.box(boundary="periodic", **common).run(steps=20000, animate=False)
+    p_reflective = reflective.calculate("pressure", method="virial")
+    p_periodic = periodic.calculate("pressure", method="virial")
+    assert 0.85 < p_periodic / p_reflective < 1.15
+    assert periodic.calculate("pressure") == p_periodic  # default for periodic
+
+
+def test_pressure_invalid_method_raises():
+    system = bc.box(N=50, size=(20, 20), seed=0)
+    sim = system.run(steps=1000, animate=False)
+    with pytest.raises(ValueError):
+        sim.calculate("pressure", method="nonsense")
+
+
 def test_momentum_conserved_periodic():
     system = bc.box(N=300, size=(40, 40), temperature=300,
                     boundary="periodic", seed=5)
