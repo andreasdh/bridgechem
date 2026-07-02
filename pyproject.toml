@@ -29,7 +29,11 @@ dependencies = [
 # numba is strongly recommended for realistic system sizes, but the package
 # runs (slowly) without it thanks to a pure-Python fallback in kernels.py.
 fast = ["numba>=0.56"]
-dev = ["pytest>=7.0", "numba>=0.56"]
+# ipympl gives smooth, low-latency playback (a live canvas, blitted, instead
+# of re-encoding a PNG every frame) -- install it and run `%matplotlib widget`
+# before creating simulations. Not required; playback still works without it.
+smooth = ["ipympl>=0.9"]
+dev = ["pytest>=7.0", "numba>=0.56", "ipympl>=0.9"]
 
 [tool.setuptools.packages.find]
 include = ["bridgechem*"]

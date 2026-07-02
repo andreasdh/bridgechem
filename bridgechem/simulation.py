@@ -152,14 +152,19 @@ class Simulation:
         twice as fast, 0.5 = half as fast). ``color_by`` is ``None``,
         ``"speed"`` or ``"mass"``. ``display_scale`` overrides the particle
         draw size for this call only (default: the size set on the ``Box``).
-        ``fps`` is a target frame rate -- redrawing has real, roughly fixed
-        cost regardless of ``fps``, so actual playback is capped to whatever
-        this machine can redraw+encode in time (measured automatically).
+        ``fps`` is a target frame rate. With the default inline backend,
+        redrawing has real, roughly fixed cost per frame, so actual playback
+        is capped to whatever this machine can redraw+encode in time
+        (measured automatically). For genuinely smooth playback, install
+        ``ipympl`` and run ``%matplotlib widget`` before creating simulations
+        -- this switches to a live canvas with no per-frame encoding cost.
+        The title shows elapsed time and instantaneous temperature.
         """
         ds = display_scale if display_scale is not None else self.display_scale
         return viz.play(self.pos, self.vel, self.times, self.mass, self.radius,
                         self.Lx, self.Ly, display_scale=ds, vectors=vectors,
-                        color_by=color_by, fps=fps, speed=speed, figsize=figsize)
+                        color_by=color_by, fps=fps, speed=speed, dim=self.dim,
+                        figsize=figsize)
 
     def histogram(self, quantity="speeds", frame=-1, bins=40,
                   compare_maxwell_boltzmann=True, ax=None):

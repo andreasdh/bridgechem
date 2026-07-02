@@ -21,7 +21,8 @@ pip install -e ".[dev]"     # numpy, matplotlib, ipywidgets, numba, pytest
 numba is optional but strongly recommended: the hot loops fall back to pure
 Python if it is missing (much slower, but everything still runs). ipywidgets
 is needed for play/pause controls; without it, playback falls back to a
-simple forward-only autoplay.
+simple forward-only autoplay. ipympl is optional and gives genuinely smooth
+playback (see "Smooth playback" below).
 
 ## Quick start
 
@@ -46,13 +47,40 @@ times faster, `speed=0.3` about three times slower -- this only changes the
 *display* pace, never the underlying physics (energy, pressure, temperature are
 computed from the real SI dynamics regardless of `speed`).
 
-Redrawing a figure and shipping it to the browser has real, fairly fixed cost
-(tens of milliseconds) that has nothing to do with the physics. `fps` is
-therefore only a *target*: on the first frame we measure how fast this machine
-can actually redraw+encode, and never promise more than that -- asking the
-`Play` widget to tick faster than the kernel can draw is what causes stutter
-(and can make played-back frames appear to arrive out of order). If playback
-still looks choppy, pass a lower `fps` explicitly.
+With the default (inline) matplotlib backend, redrawing a figure and shipping
+it to the browser as a PNG has real, fairly fixed cost (tens of milliseconds)
+that has nothing to do with the physics. `fps` is therefore only a *target*:
+on the first frame we measure how fast this machine can actually
+redraw+encode, and never promise more than that -- asking the `Play` widget to
+tick faster than the kernel can draw is what causes stutter (and can make
+played-back frames appear to arrive out of order). If playback still looks
+choppy, pass a lower `fps` explicitly, or see "Smooth playback" below.
+
+The title above the plot shows elapsed time and the instantaneous
+temperature, so you can watch both evolve together -- handy during a
+`set_temperature` cooling ramp.
+
+### Smooth playback
+
+For genuinely smooth, low-latency playback (no PNG re-encoding per frame,
+comparable to [bubblebox](https://github.com/audunsh/bubblebox)), install
+`ipympl` and switch to its live-canvas backend before creating any
+simulations:
+
+```bash
+pip install ipympl
+```
+
+```python
+%matplotlib widget
+import bridgechem as bc
+...
+```
+
+`bridgechem` detects the live canvas automatically and updates it by
+blitting (redrawing only the moving particles over a cached background)
+instead of encoding and shipping a new image every frame. Without `ipympl`,
+playback still works via the snapshot fallback described above.
 
 `run()` still returns a `Simulation` you can analyse:
 
@@ -132,6 +160,13 @@ Omit `rate` to jump to the target immediately instead of ramping. Track the
 condensation with `sim.calculate("potential_energy")` (drops sharply as
 particles bind together) alongside `sim.calculate("temperature")`.
 
+A fast quench typically nucleates **several separate droplets** rather than
+one -- this is real nucleation physics (multiple independent nucleation
+sites), not a bug. Given enough further simulation time the droplets diffuse,
+collide and coalesce into a single cluster, releasing a little more latent
+heat (a small temperature uptick) each time two droplets merge, just like
+real condensation/crystallisation.
+
 ## What's implemented
 
 - A 2D box of hard spheres with **reflective** (default) or **periodic** walls,
@@ -141,7 +176,9 @@ particles bind together) alongside `sim.calculate("temperature")`.
   momentum-conserving) for the hard-sphere engine.
 - **Interactive playback** in Jupyter (default inline backend, no HTML): play,
   pause, and scrub through the trajectory with an `ipywidgets.Play` widget,
-  with big, auto-sized particles and optional velocity-vector arrows.
+  with big, auto-sized particles and optional velocity-vector arrows. The
+  title shows elapsed time and instantaneous temperature. Install `ipympl`
+  for smooth, blitted playback with no per-frame image encoding.
 - Colour particles by instantaneous **speed** or by (fixed) **mass**
   (`color_by="mass"`, after `system.set_mass(...)`).
 - `system.set_mass(mass, indices=...)` to build a mixture -- e.g. a light/heavy
