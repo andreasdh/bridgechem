@@ -131,7 +131,7 @@ class Simulation:
                                            self.area)
 
     # -- visualisation ------------------------------------------------------
-    def show(self, color_by="speed", vectors=False, fps=30, speed=1.0,
+    def show(self, color_by="speed", vectors=False, fps=15, speed=1.0,
              display_scale=None, figsize=(6, 6)):
         """Play back the recorded trajectory with play/pause/scrub controls.
 
@@ -142,6 +142,9 @@ class Simulation:
         twice as fast, 0.5 = half as fast). ``color_by`` is ``None``,
         ``"speed"`` or ``"mass"``. ``display_scale`` overrides the particle
         draw size for this call only (default: the size set on the ``Box``).
+        ``fps`` is a target frame rate -- redrawing has real, roughly fixed
+        cost regardless of ``fps``, so actual playback is capped to whatever
+        this machine can redraw+encode in time (measured automatically).
         """
         ds = display_scale if display_scale is not None else self.display_scale
         return viz.play(self.pos, self.vel, self.times, self.mass, self.radius,

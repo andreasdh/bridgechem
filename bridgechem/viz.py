@@ -38,7 +38,7 @@ SECONDS_PER_CROSSING = 6.0
 MAX_FRAMES = 3000  # safety cap on stored/played frames for very long/fast runs
 
 
-def pick_sample_every(mean_speed, dt, Lx, Ly, *, fps=30, speed=1.0,
+def pick_sample_every(mean_speed, dt, Lx, Ly, *, fps=15, speed=1.0,
                       seconds_per_crossing=SECONDS_PER_CROSSING):
     """Choose how many physics steps to group into one displayed frame.
 
@@ -137,7 +137,7 @@ def _update_artists(coll, quiv, title, pos, vel, color_by, time_s):
 # interactive playback (play / pause / scrub)
 # --------------------------------------------------------------------------- #
 def play(pos, vel, times, mass, radius, Lx, Ly, *, display_scale=1.0,
-         vectors=False, color_by="speed", fps=30, speed=1.0, figsize=(6, 6)):
+         vectors=False, color_by="speed", fps=15, speed=1.0, figsize=(6, 6)):
     """Play back a trajectory with play/pause/scrub controls (no HTML file).
 
     ``pos``/``vel`` are ``(n_frames, N, 2)`` arrays, ``times`` is ``(n_frames,)``.
@@ -145,6 +145,15 @@ def play(pos, vel, times, mass, radius, Lx, Ly, *, display_scale=1.0,
     forward-only autoplay (no pause) if it isn't installed. Returns the
     ``ipywidgets.Play`` widget (for tests / further wiring), or ``None`` if
     nothing could be displayed (e.g. outside a notebook).
+
+    Redrawing a matplotlib figure and shipping it to the browser as a PNG has
+    real, fairly fixed overhead (tens of milliseconds) that has nothing to do
+    with how fast the physics runs. If the ``Play`` widget ticks faster than
+    that, ticks queue up faster than they can be drawn -- which looks like
+    stutter, and can make played-back frames appear to lag or arrive out of
+    order. So ``fps`` here is a *target*: we measure how long the first frame
+    actually takes to render on this machine and never promise more than
+    that, capping the widget's tick rate accordingly.
     """
     if color_by not in VALID_COLOR_BY:
         raise ValueError(f"color_by must be one of {VALID_COLOR_BY}")
@@ -174,12 +183,24 @@ def play(pos, vel, times, mass, radius, Lx, Ly, *, display_scale=1.0,
     _update_artists(coll, quiv, title, pos[0], vel[0], color_by_render,
                     float(times[0]) if times.size else None)
 
+    import io
+    import time
     import matplotlib.pyplot as plt
     try:
         from IPython.display import display
     except ImportError:
         plt.close(fig)
         return None  # nothing to display outside IPython
+
+    # Measure the real redraw+encode cost directly via the Agg pipeline (not
+    # by timing display() itself, which can short-circuit with no cost when
+    # there's no live frontend to publish to -- e.g. outside a real kernel).
+    # matplotlib caches the rendered raster, so the display() call right
+    # after reuses it instead of rendering twice.
+    t0 = time.time()
+    fig.canvas.draw()
+    fig.savefig(io.BytesIO(), format="png")
+    render_time = time.time() - t0
 
     handle = display(fig, display_id=True)  # None outside a live kernel
     # We keep updating `fig` in place via `handle` from here on, so drop it
@@ -195,8 +216,12 @@ def play(pos, vel, times, mass, radius, Lx, Ly, *, display_scale=1.0,
                            color_by_render, fps, speed)
         return None
 
-    interval_ms = (max(1, round(1000.0 / (fps * max(speed, 1e-9))))
-                  if fps and fps > 0 else 1)
+    # Never tick faster than this machine can actually redraw+encode a frame
+    # (measured above from the first frame), with a safety margin so a
+    # slightly-more-expensive later frame doesn't immediately fall behind.
+    achievable_fps = 0.8 / max(render_time, 1e-3)
+    effective_fps = min(fps, achievable_fps) if fps and fps > 0 else achievable_fps
+    interval_ms = max(1, round(1000.0 / (effective_fps * max(speed, 1e-9))))
     play_widget = widgets.Play(min=0, max=n_frames - 1, step=1,
                                interval=interval_ms, value=0)
     slider = widgets.IntSlider(min=0, max=n_frames - 1, value=0,

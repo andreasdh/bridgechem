@@ -207,7 +207,7 @@ class Box:
     # -- batch run ----------------------------------------------------------
     def run(self, steps=1000, *, t=None, dt=None, sample_every=None,
             method="hard-sphere", animate=None, vectors=False,
-            color_by="speed", fps=30, speed=1.0, display_scale=None,
+            color_by="speed", fps=15, speed=1.0, display_scale=None,
             figsize=(6, 6)):
         """Run the simulation and return a :class:`Simulation` with the trajectory.
 
@@ -240,7 +240,10 @@ class Box:
         fps : float
             Target frames per second (visual smoothness only -- does not
             change how fast the simulation *looks* like it's moving; use
-            ``speed`` for that).
+            ``speed`` for that). Redrawing has real, roughly fixed cost per
+            frame, so actual playback is capped to whatever this machine can
+            redraw+encode in time (measured automatically) -- if it's still
+            choppy, try a lower ``fps``.
         speed : float
             Pedagogical playback speed. At the default ``speed=1`` a
             mean-speed particle takes a few seconds to cross the box, slow

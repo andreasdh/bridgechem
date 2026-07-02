@@ -101,6 +101,18 @@ def test_play_does_not_leak_open_figures():
     assert len(plt.get_fignums()) == n_before
 
 
+def test_play_never_exceeds_measured_achievable_fps():
+    # Regression test: the Play widget must never tick faster than this
+    # machine can actually redraw+encode a frame, or ticks pile up faster
+    # than they can be drawn -- which looks like stutter and can make
+    # playback appear to skip or jump backward.
+    system, pos, vel, times, _ = _trajectory(N=100, steps=2000)
+    pw = viz.play(pos, vel, times, system.mass, system.radius, system.Lx,
+                  system.Ly, color_by="speed", fps=1000)  # deliberately absurd
+    achieved_fps = 1000.0 / pw.interval
+    assert achieved_fps < 1000  # must have been capped down, not honored
+
+
 def test_play_zero_fps_does_not_raise():
     system, pos, vel, times, _ = _trajectory(N=20, steps=500)
     pw = viz.play(pos, vel, times, system.mass, system.radius, system.Lx,

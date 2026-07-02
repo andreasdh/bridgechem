@@ -46,6 +46,14 @@ times faster, `speed=0.3` about three times slower -- this only changes the
 *display* pace, never the underlying physics (energy, pressure, temperature are
 computed from the real SI dynamics regardless of `speed`).
 
+Redrawing a figure and shipping it to the browser has real, fairly fixed cost
+(tens of milliseconds) that has nothing to do with the physics. `fps` is
+therefore only a *target*: on the first frame we measure how fast this machine
+can actually redraw+encode, and never promise more than that -- asking the
+`Play` widget to tick faster than the kernel can draw is what causes stutter
+(and can make played-back frames appear to arrive out of order). If playback
+still looks choppy, pass a lower `fps` explicitly.
+
 `run()` still returns a `Simulation` you can analyse:
 
 ```python
