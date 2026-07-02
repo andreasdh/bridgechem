@@ -17,7 +17,7 @@ from . import analysis, viz
 
 class Simulation:
     def __init__(self, traj_pos, traj_vel, times, impulse, *, mass, radius,
-                 Lx, Ly, dim=2, periodic=False):
+                 Lx, Ly, dim=2, periodic=False, display_scale=1.0):
         self.pos = np.asarray(traj_pos)          # (n_frames, N, 2), m
         self.vel = np.asarray(traj_vel)          # (n_frames, N, 2), m/s
         self.times = np.asarray(times)           # (n_frames,), s
@@ -28,6 +28,7 @@ class Simulation:
         self.Ly = float(Ly)
         self.dim = dim
         self.periodic = periodic
+        self.display_scale = float(display_scale)
 
     # -- basic properties ---------------------------------------------------
     @property
@@ -80,13 +81,14 @@ class Simulation:
                                            self.area)
 
     # -- visualisation ------------------------------------------------------
-    def show(self, color_by=None, interval=40):
-        """Return an animation of the trajectory (renders inline in Jupyter)."""
-        return viz.animate(
-            self.pos, self.radius, self.Lx, self.Ly, times=self.times,
-            color_by=color_by, velocities=self.vel if color_by else None,
-            interval=interval,
-        )
+    def show(self, color_by="speed", vectors=False, fps=30, figsize=(6, 6)):
+        """Replay the recorded trajectory as a live animation (no HTML file).
+
+        Updates a single figure in place, so it works with the default inline
+        matplotlib backend in Jupyter with no extra setup.
+        """
+        return viz.replay(self, color_by=color_by, vectors=vectors, fps=fps,
+                          figsize=figsize)
 
     def histogram(self, quantity="speeds", frame=-1, bins=40,
                   compare_maxwell_boltzmann=True, ax=None):

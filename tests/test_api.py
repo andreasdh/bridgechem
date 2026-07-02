@@ -32,7 +32,7 @@ def test_custom_mass_and_radius_override():
 
 def test_run_returns_simulation_with_expected_shapes():
     system = bc.box(N=50, size=(20, 20), seed=0)
-    sim = system.run(steps=2000, sample_every=100)
+    sim = system.run(steps=2000, sample_every=100, animate=False)
     assert isinstance(sim, bc.Simulation)
     assert sim.n_particles == 50
     assert sim.pos.shape[1:] == (50, 2)
@@ -42,13 +42,13 @@ def test_run_returns_simulation_with_expected_shapes():
 
 def test_t_alias_for_steps():
     system = bc.box(N=20, size=(20, 20), seed=0)
-    sim = system.run(t=1000, sample_every=100)
+    sim = system.run(t=1000, sample_every=100, animate=False)
     assert sim.total_time > 0
 
 
 def test_calculate_dispatch():
     system = bc.box(N=40, size=(20, 20), seed=0)
-    sim = system.run(steps=2000, sample_every=200)
+    sim = system.run(steps=2000, sample_every=200, animate=False)
     assert bc.analysis.speeds(sim.vel).shape == sim.vel.shape[:-1]
     assert np.isscalar(sim.calculate("pressure")) or np.ndim(sim.calculate("pressure")) == 0
     assert sim.calculate("mean_speed") > 0
@@ -57,9 +57,16 @@ def test_calculate_dispatch():
         sim.calculate("nonsense")
 
 
+def test_auto_radius_targets_packing():
+    # with no explicit radius, particles are sized to ~`packing` of the box
+    system = bc.box(N=200, size=(30, 30), packing=0.15)
+    covered = system.N * np.pi * system.radius[0] ** 2 / system.area
+    assert np.isclose(covered, 0.15, rtol=1e-6)
+
+
 def test_too_many_particles_raises():
     with pytest.raises(ValueError):
-        bc.box(N=100000, size=(5, 5), gas="argon")
+        bc.box(N=100000, size=(5, 5), radius=0.05)
 
 
 def test_advance_steps_live_state():
