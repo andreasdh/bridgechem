@@ -20,7 +20,7 @@ PRESSURE_METHODS = ("wall", "virial", "ideal")
 class Simulation:
     def __init__(self, traj_pos, traj_vel, times, impulse, virial=0.0, *,
                  mass, radius, Lx, Ly, dim=2, periodic=False,
-                 display_scale=1.0):
+                 potential_energy=None, display_scale=1.0):
         self.pos = np.asarray(traj_pos)          # (n_frames, N, 2), m
         self.vel = np.asarray(traj_vel)          # (n_frames, N, 2), m/s
         self.times = np.asarray(times)           # (n_frames,), s
@@ -33,6 +33,10 @@ class Simulation:
         self.dim = dim
         self.periodic = periodic
         self.display_scale = float(display_scale)
+        # (n_frames,) J -- zero for a pure hard-sphere run (no interactions)
+        self.potential_energy = (np.asarray(potential_energy)
+                                 if potential_energy is not None
+                                 else np.zeros(self.pos.shape[0]))
 
     # -- basic properties ---------------------------------------------------
     @property
@@ -56,7 +60,8 @@ class Simulation:
         """Compute a derived quantity from the trajectory.
 
         Supported: ``velocities``, ``speeds``, ``temperature``,
-        ``kinetic_energy``, ``pressure``, ``mean_speed``.
+        ``kinetic_energy``, ``potential_energy``, ``total_energy``,
+        ``pressure``, ``mean_speed``.
 
         For ``"pressure"``, ``method`` picks *how* it's computed -- see
         :meth:`pressure` for the physics behind each option.
@@ -68,15 +73,20 @@ class Simulation:
             return analysis.speeds(self.vel)
         if q in ("temperature", "temp"):
             return analysis.temperature(self.vel, self.mass, dim=self.dim)
-        if q in ("kinetic_energy", "ke", "energy"):
+        if q in ("kinetic_energy", "ke"):
             return analysis.kinetic_energy(self.vel, self.mass)
+        if q in ("potential_energy", "pe"):
+            return self.potential_energy
+        if q in ("total_energy", "energy"):
+            return analysis.kinetic_energy(self.vel, self.mass) + self.potential_energy
         if q == "pressure":
             return self.pressure(method=method)
         if q == "mean_speed":
             return float(np.mean(analysis.speeds(self.vel)))
         raise ValueError(
             f"Unknown quantity {quantity!r}. Try: velocities, speeds, "
-            "temperature, kinetic_energy, pressure, mean_speed."
+            "temperature, kinetic_energy, potential_energy, total_energy, "
+            "pressure, mean_speed."
         )
 
     def pressure(self, method: str = None) -> float:

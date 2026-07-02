@@ -94,14 +94,51 @@ something different about where "pressure" comes from:
 | `method`     | How it's computed | Needs | Notes |
 |--------------|--------------------|-------|-------|
 | `"wall"`     | Momentum transferred to the container walls per unit time and length -- literally what a pressure gauge on the wall would read. | reflective boundaries | Default for reflective boxes; raises a clear error on a periodic box instead of silently returning zero. |
-| `"virial"`   | The Clausius virial theorem from particle-particle collisions: `P = [N k_B T + virial_term] / A`. | works either way | Default for periodic boxes (the only one that works there); should agree with `"wall"` for a reflective box -- two independent measurements of the same physical pressure. |
+| `"virial"`   | The Clausius virial theorem from particle-particle collisions/forces: `P = [N k_B T + virial_term] / A`. | works either way | Default for periodic boxes (the only one that works there); should agree with `"wall"` for a reflective box -- two independent measurements of the same physical pressure. |
 | `"ideal"`    | The textbook estimate `P = N k_B T / A`. | nothing | A theoretical reference, not a measurement -- ignores particle size and collisions entirely. Same as `sim.ideal_gas_pressure()`. |
 
-## What milestone 1 covers
+## Interactions and phase transitions
 
-- A 2D box of hard spheres with **reflective** (default) or **periodic** walls.
+By default particles are hard spheres with no forces between them (an ideal
+gas). `add_interactions` switches on Lennard-Jones forces and moves the engine
+to velocity-Verlet integration -- the steep repulsive core of LJ keeps
+particles apart continuously, so there's no separate collision step once
+interactions are on:
+
+```python
+system = bc.box(N=200, size=(7, 7), gas="argon", temperature=300, boundary="periodic")
+system.add_interactions("LJ")             # epsilon/sigma default to the box's gas
+sim = system.run(steps=20000)             # method="velocity-verlet" is chosen automatically
+```
+
+Pass `epsilon` (kelvin, i.e. epsilon/k_B) and/or `sigma` (nm) to override the
+gas defaults, or `gas=` to borrow another gas's parameters. Periodic boundaries
+are recommended for interacting systems -- it's the standard choice for bulk
+gas/liquid MD, and reflective walls have a small, expected energy-conservation
+cost from clamping a particle's position at the instant it bounces (`_auto_dt`
+compensates automatically, but periodic still conserves energy better).
+
+`set_temperature` ramps the temperature during the *next* `run()` call --
+combine it with interactions to cool a gas and watch it condense, a real phase
+transition (an ideal gas without interactions has no phase transition, so this
+is mostly useful once LJ is on):
+
+```python
+system.set_temperature(target_temperature=20, rate=50)  # cool to 20 K at 50 K/ps
+sim = system.run(steps=40000)
+```
+
+Omit `rate` to jump to the target immediately instead of ramping. Track the
+condensation with `sim.calculate("potential_energy")` (drops sharply as
+particles bind together) alongside `sim.calculate("temperature")`.
+
+## What's implemented
+
+- A 2D box of hard spheres with **reflective** (default) or **periodic** walls,
+  or (once `add_interactions` is called) continuous Lennard-Jones forces
+  integrated with velocity-Verlet.
 - Elastic particle–particle and particle–wall collisions (energy- and
-  momentum-conserving).
+  momentum-conserving) for the hard-sphere engine.
 - **Interactive playback** in Jupyter (default inline backend, no HTML): play,
   pause, and scrub through the trajectory with an `ipywidgets.Play` widget,
   with big, auto-sized particles and optional velocity-vector arrows.
@@ -109,20 +146,23 @@ something different about where "pressure" comes from:
   (`color_by="mass"`, after `system.set_mass(...)`).
 - `system.set_mass(mass, indices=...)` to build a mixture -- e.g. a light/heavy
   pair to watch differential collision behaviour.
+- `system.add_interactions("LJ")` (or the alias `"dispersion"`) for
+  Lennard-Jones forces, with configurable `epsilon`/`sigma`/`cutoff`.
+- `system.set_temperature(target, rate=...)` to ramp temperature during a run
+  -- watch a gas condense as it cools.
 - Velocities initialised from Maxwell–Boltzmann, or all at the same speed
   (`velocity_init="uniform_speed"`) to watch a distribution relax under collisions.
-- Analysis: speeds, temperature, kinetic energy, and pressure via three methods
-  (see "Pressure" above) -- larger particles read a bit high, the excluded-area
-  effect of finite size, real physics.
-- Reference gases: argon, helium, neon, krypton, xenon.
+- Analysis: speeds, temperature, kinetic/potential/total energy, and pressure
+  via three methods (see "Pressure" above) -- larger particles read a bit high,
+  the excluded-area effect of finite size, real physics.
+- Reference gases (mass, hard-sphere radius, and LJ epsilon/sigma): argon,
+  helium, neon, krypton, xenon.
 
 See [`examples/demo.ipynb`](examples/demo.ipynb) for a guided tour.
 
 ## Roadmap
 
-- **Interactions**: `system.add_interactions("LJ")` / `"dispersion"` / custom
-  potentials, velocity-Verlet integration, virial pressure, phase transitions.
-- **Thermostatting**: `system.set_temperature(...)` and gradual cooling.
+- Custom pairwise potentials beyond Lennard-Jones.
 - **3D** boxes and richer visualisation.
 
 ## Development

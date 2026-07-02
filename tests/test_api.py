@@ -77,10 +77,12 @@ def test_advance_steps_live_state():
     assert np.max(np.abs(system.pos - pos_before)) > 1e-12
 
 
-def test_add_interactions_not_yet_implemented():
+def test_add_interactions_switches_engine():
+    # full functional coverage lives in tests/test_lj.py
     system = bc.box(N=10, size=(20, 20))
-    with pytest.raises(NotImplementedError):
-        system.add_interactions("LJ")
+    assert not system._has_interactions
+    system.add_interactions("LJ")
+    assert system._has_interactions
 
 
 def test_set_mass_by_value_all_particles():
