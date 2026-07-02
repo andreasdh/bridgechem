@@ -182,6 +182,11 @@ def play(pos, vel, times, mass, radius, Lx, Ly, *, display_scale=1.0,
         return None  # nothing to display outside IPython
 
     handle = display(fig, display_id=True)  # None outside a live kernel
+    # We keep updating `fig` in place via `handle` from here on, so drop it
+    # from pyplot's own figure registry now -- otherwise IPython's inline
+    # backend auto-displays every still-open figure again (as a frozen,
+    # non-interactive duplicate) at the end of the cell.
+    plt.close(fig)
 
     try:
         import ipywidgets as widgets
@@ -213,9 +218,12 @@ def play(pos, vel, times, mass, radius, Lx, Ly, *, display_scale=1.0,
 
 def _autoplay_fallback(fig, handle, coll, quiv, title, pos, vel, times,
                        color_by, fps, speed):
-    """Forward-only autoplay used when ipywidgets isn't installed."""
+    """Forward-only autoplay used when ipywidgets isn't installed.
+
+    ``fig`` is already closed (dropped from pyplot's figure registry) by the
+    caller; we keep updating it in place via ``handle`` regardless.
+    """
     import time
-    import matplotlib.pyplot as plt
 
     print("Tip: install ipywidgets for play/pause/scrub controls "
           "(pip install ipywidgets).")
@@ -230,7 +238,6 @@ def _autoplay_fallback(fig, handle, coll, quiv, title, pos, vel, times,
         rest = frame_budget - (time.time() - t0)
         if rest > 0:
             time.sleep(rest)
-    plt.close(fig)
 
 
 # --------------------------------------------------------------------------- #

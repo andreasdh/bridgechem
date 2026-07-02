@@ -2,6 +2,7 @@
 
 import matplotlib
 matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 import numpy as np
 import pytest
@@ -84,6 +85,20 @@ def test_play_invalid_color_by_raises():
     with pytest.raises(ValueError):
         viz.play(pos, vel, times, system.mass, system.radius, system.Lx,
                  system.Ly, color_by="type")
+
+
+def test_play_does_not_leak_open_figures():
+    # Regression test: play() must drop its figure from pyplot's registry
+    # once handed off to the display handle, otherwise IPython's inline
+    # backend auto-renders it again as a frozen duplicate at cell end, and
+    # repeated calls (e.g. run() then show()) accumulate open figures.
+    n_before = len(plt.get_fignums())
+    system, pos, vel, times, _ = _trajectory(N=30, steps=500)
+    viz.play(pos, vel, times, system.mass, system.radius, system.Lx,
+             system.Ly, color_by="speed")
+    viz.play(pos, vel, times, system.mass, system.radius, system.Lx,
+             system.Ly, color_by=None)
+    assert len(plt.get_fignums()) == n_before
 
 
 def test_play_zero_fps_does_not_raise():
