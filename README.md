@@ -207,3 +207,18 @@ See [`examples/demo.ipynb`](examples/demo.ipynb) for a guided tour.
 ```bash
 pytest        # physics + API tests
 ```
+
+### Releasing (PyPI)
+
+`.github/workflows/publish.yml` builds and publishes to PyPI automatically
+whenever a GitHub Release is published, via [trusted
+publishing](https://docs.pypi.org/trusted-publishers/) (no API token stored
+in the repo). Tests run first as a gate. To cut a release:
+
+1. Bump `version` in `pyproject.toml`.
+2. Commit and push.
+3. Create a GitHub Release for a new tag (e.g. `v0.2.0`).
+
+One-time setup on PyPI: add this repo's `publish.yml` workflow (environment
+`pypi`) as a trusted publisher for the `bridgechem` project at
+https://pypi.org/manage/project/bridgechem/settings/publishing/.

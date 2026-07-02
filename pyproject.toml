@@ -25,6 +25,10 @@ dependencies = [
     "ipywidgets>=7.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/andreasdh/bridgechem"
+Repository = "https://github.com/andreasdh/bridgechem"
+
 [project.optional-dependencies]
 # numba is strongly recommended for realistic system sizes, but the package
 # runs (slowly) without it thanks to a pure-Python fallback in kernels.py.
