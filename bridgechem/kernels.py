@@ -142,6 +142,31 @@ def _step(pos, vel, radius, inv_mass, Lx, Ly, dt, periodic, impulse):
         pos[i, 1] += vel[i, 1] * dt
     _apply_boundaries(pos, vel, radius, inv_mass, Lx, Ly, periodic, impulse)
     _resolve_collisions(pos, vel, radius, inv_mass, Lx, Ly, periodic)
+    if not periodic:
+        # de-overlap can nudge a particle past a wall; clamp back inside
+        # (position only, so velocities/energy/pressure are unaffected).
+        for i in range(N):
+            r = radius[i]
+            if pos[i, 0] < r:
+                pos[i, 0] = r
+            elif pos[i, 0] > Lx - r:
+                pos[i, 0] = Lx - r
+            if pos[i, 1] < r:
+                pos[i, 1] = r
+            elif pos[i, 1] > Ly - r:
+                pos[i, 1] = Ly - r
+    else:
+        # de-overlap can nudge a particle just outside [0, L); re-wrap it
+        # (pushes are tiny, so a single shift suffices).
+        for i in range(N):
+            if pos[i, 0] < 0.0:
+                pos[i, 0] += Lx
+            elif pos[i, 0] >= Lx:
+                pos[i, 0] -= Lx
+            if pos[i, 1] < 0.0:
+                pos[i, 1] += Ly
+            elif pos[i, 1] >= Ly:
+                pos[i, 1] -= Ly
 
 
 @njit
@@ -174,3 +199,16 @@ def _simulate(pos, vel, radius, inv_mass, Lx, Ly, dt, n_steps, sample_every,
             frame += 1
 
     return traj_pos[:frame], traj_vel[:frame], times[:frame], impulse
+
+
+@njit
+def _run_chunk(pos, vel, radius, inv_mass, Lx, Ly, dt, n_steps, periodic):
+    """Advance ``n_steps`` steps in place and return the wall impulse.
+
+    Used by the real-time viewer: Python drives one call per animation frame,
+    so the inner steps stay compiled while display happens between frames.
+    """
+    impulse = np.zeros(2)
+    for _ in range(n_steps):
+        _step(pos, vel, radius, inv_mass, Lx, Ly, dt, periodic, impulse)
+    return impulse

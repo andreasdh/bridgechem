@@ -55,11 +55,18 @@ class Box:
     size : tuple(float, float)
         Box side lengths in **nanometres**.
     gas : str
-        Reference gas providing default mass and radius ("argon", "helium", ...).
+        Reference gas providing the default particle mass ("argon", "helium", ...).
     mass : float, optional
         Particle mass in **amu**, overrides the gas default.
     radius : float, optional
-        Hard-sphere radius in **nanometres**, overrides the gas default.
+        Hard-sphere radius in **nanometres**. If omitted the radius is chosen
+        automatically from ``packing`` so the particles are big and easy to see
+        (this is what you collide with *and* what is drawn). For a physically
+        dilute point-like gas, pass a small explicit radius.
+    packing : float
+        Target fraction of the box area covered by particles, used to pick the
+        default radius (ignored if ``radius`` is given). ~0.15 gives a lively,
+        clearly visible gas.
     temperature : float
         Initial temperature in K (used to sample velocities).
     boundary : {"reflective", "periodic"}
@@ -68,13 +75,17 @@ class Box:
         "thermal" samples a Maxwell-Boltzmann distribution at ``temperature``;
         "uniform_speed" gives every particle the same speed (random direction)
         -- handy for watching a distribution relax to Maxwell-Boltzmann.
+    display_scale : float
+        Visual size multiplier for drawing particles (1.0 = draw at true
+        collision size).
     seed : int, optional
         Seed for reproducible initial velocities.
     """
 
-    def __init__(self, N, size=(10.0, 10.0), *, gas=DEFAULT_GAS, mass=None,
-                 radius=None, temperature=300.0, boundary="reflective",
-                 velocity_init="thermal", dim=2, seed=None):
+    def __init__(self, N, size=(20.0, 20.0), *, gas=DEFAULT_GAS, mass=None,
+                 radius=None, packing=0.15, temperature=300.0,
+                 boundary="reflective", velocity_init="thermal",
+                 display_scale=1.0, dim=2, seed=None):
         if dim != 2:
             raise NotImplementedError("bridgechem currently supports 2D only.")
         self.N = int(N)
@@ -82,10 +93,15 @@ class Box:
         self.Lx = float(size[0]) * NM
         self.Ly = float(size[1]) * NM
         self.temperature = float(temperature)
+        self.display_scale = float(display_scale)
 
         props = gas_properties(gas)
         m_kg = mass * AMU if mass is not None else props["mass_kg"]
-        r_m = radius * NM if radius is not None else props["radius_m"]
+        if radius is not None:
+            r_m = radius * NM
+        else:
+            # size the particles so they cover ~`packing` of the box area
+            r_m = np.sqrt(packing * self.area / (self.N * np.pi))
         self.mass = np.full(self.N, m_kg, dtype=float)
         self.radius = np.full(self.N, r_m, dtype=float)
         self.inv_mass = 1.0 / self.mass
@@ -165,8 +181,13 @@ class Box:
 
     # -- batch run ----------------------------------------------------------
     def run(self, steps=1000, *, t=None, dt=None, sample_every=None,
-            method="hard-sphere"):
+            method="hard-sphere", animate=None, vectors=False,
+            color_by="speed", fps=30, speed=1.0, figsize=(6, 6)):
         """Run the simulation and return a :class:`Simulation` with the trajectory.
+
+        In a Jupyter notebook the simulation animates **live** as it integrates
+        (the box appears immediately, no separate ``show()`` call and no HTML
+        file). Outside a notebook it runs headless.
 
         Parameters
         ----------
@@ -175,11 +196,31 @@ class Box:
         dt : float, optional
             Time step in seconds. Chosen automatically if omitted.
         sample_every : int, optional
-            Record a frame every this many steps (auto ~300 frames if omitted).
+            Record a frame every this many steps. Chosen automatically from
+            ``speed`` if omitted -- prefer tuning ``speed`` over this.
         method : str
             "hard-sphere" (default). "velocity-verlet" is accepted and behaves
             identically until interactions are added, at which point the Verlet
             integrator drives the forces.
+        animate : bool, optional
+            Show the live animation. Defaults to True inside a notebook, False
+            otherwise. Set False to run as fast as possible and inspect the
+            trajectory afterwards.
+        vectors : bool
+            Draw a velocity arrow on each particle.
+        color_by : None or "speed"
+            Colour particles by their speed.
+        fps : float
+            Target frames per second for the live animation (visual smoothness
+            only -- does not change how fast the simulation *looks* like it's
+            moving; use ``speed`` for that).
+        speed : float
+            Pedagogical playback speed. At the default ``speed=1`` a
+            mean-speed particle takes a few seconds to cross the box, slow
+            enough to actually follow collisions. ``speed=3`` plays three
+            times faster, ``speed=0.3`` about three times slower. This does
+            not change the physics, only how many physics steps are grouped
+            into each displayed frame.
         """
         if t is not None:
             steps = t
@@ -188,13 +229,30 @@ class Box:
             raise ValueError("method must be 'hard-sphere' or 'velocity-verlet'")
         if dt is None:
             dt = self._auto_dt()
-        if sample_every is None:
-            sample_every = max(1, steps // 300)
 
-        traj_pos, traj_vel, times, impulse = kernels._simulate(
-            self.pos, self.vel, self.radius, self.inv_mass,
-            self.Lx, self.Ly, dt, steps, sample_every, self.periodic,
-        )
+        from . import viz
+        if sample_every is None:
+            mean_speed = float(np.sqrt(np.sum(self.vel ** 2, axis=1)).mean())
+            sample_every = viz.pick_sample_every(
+                mean_speed, dt, self.Lx, self.Ly, fps=fps, speed=speed,
+            )
+            # cap total stored frames for very long or very fast-playing runs
+            if steps // sample_every + 1 > viz.MAX_LIVE_FRAMES:
+                sample_every = max(sample_every, -(-steps // viz.MAX_LIVE_FRAMES))
+
+        if animate is None:
+            animate = viz.in_notebook()
+
+        if animate:
+            traj_pos, traj_vel, times, impulse = viz.live_run(
+                self, dt=dt, steps=steps, sample_every=sample_every,
+                vectors=vectors, color_by=color_by, fps=fps, figsize=figsize,
+            )
+        else:
+            traj_pos, traj_vel, times, impulse = kernels._simulate(
+                self.pos, self.vel, self.radius, self.inv_mass,
+                self.Lx, self.Ly, dt, steps, sample_every, self.periodic,
+            )
         # update live state to the end of the run
         self.pos = traj_pos[-1].copy()
         self.vel = traj_vel[-1].copy()
@@ -202,7 +260,7 @@ class Box:
         return Simulation(
             traj_pos, traj_vel, times, impulse,
             mass=self.mass, radius=self.radius, Lx=self.Lx, Ly=self.Ly,
-            dim=self.dim, periodic=self.periodic,
+            dim=self.dim, periodic=self.periodic, display_scale=self.display_scale,
         )
 
     # -- future milestones --------------------------------------------------

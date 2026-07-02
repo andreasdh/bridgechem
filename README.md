@@ -26,16 +26,32 @@ Python if it is missing (much slower, but everything still runs).
 ```python
 import bridgechem as bc
 
-system = bc.box(N=1000, size=(80, 80))   # 80 nm x 80 nm box of argon at 300 K
-sim = system.run(steps=20000)            # numba-accelerated
-sim.show()                               # live animation in the notebook
+system = bc.box(N=200, size=(40, 40))    # 40 nm x 40 nm box of argon at 300 K
+sim = system.run(steps=20000, vectors=True)   # animates LIVE as it runs
+```
 
+In a Jupyter notebook the box appears and starts moving immediately — no separate
+`show()` step and no HTML file. Particles are auto-sized to be big and easy to see
+(and drawn at their true collision size); `vectors=True` overlays velocity arrows.
+
+Real gas particles move at hundreds of m/s, far too fast to watch, so playback is
+paced by a `speed` knob rather than shown at true speed: at the default `speed=1`
+a typical particle takes a few seconds to cross the box. `speed=3` plays three
+times faster, `speed=0.3` about three times slower -- this only changes the
+*display* pace, never the underlying physics (energy, pressure, temperature are
+computed from the real SI dynamics regardless of `speed`).
+
+`run()` still returns a `Simulation` you can analyse:
+
+```python
 sim.histogram("speeds")                  # compare with Maxwell-Boltzmann
 sim.calculate("pressure")                # 2D pressure (N/m) from wall collisions
 sim.calculate("temperature")             # per-frame temperature (K)
+sim.show()                               # replay the recorded run (also live)
 ```
 
-If you prefer an explicit loop, the same engine is available step by step:
+Use `animate=False` to run headless at full speed (e.g. for pressure statistics),
+and the explicit-loop style is available too:
 
 ```python
 while t < t_end:
@@ -61,11 +77,13 @@ couple of chemistry-friendly *input* units, converted to SI immediately:
 - A 2D box of hard spheres with **reflective** (default) or **periodic** walls.
 - Elastic particle–particle and particle–wall collisions (energy- and
   momentum-conserving).
+- **Live, real-time animation** in Jupyter (default inline backend, no HTML),
+  with big, auto-sized particles and optional velocity-vector arrows.
 - Velocities initialised from Maxwell–Boltzmann, or all at the same speed to
   watch a distribution *relax* to equilibrium.
 - Analysis: speeds, temperature, kinetic energy, and pressure (with the 2D
-  ideal-gas law `P = N k_B T / A` for comparison — the few-percent excess you
-  see is the excluded-area effect of finite particles, real physics).
+  ideal-gas law `P = N k_B T / A` for comparison — larger particles read a bit
+  high, the excluded-area effect of finite size, real physics).
 - Reference gases: argon, helium, neon, krypton, xenon.
 
 See [`examples/demo.ipynb`](examples/demo.ipynb) for a guided tour.
