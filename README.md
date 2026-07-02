@@ -33,6 +33,14 @@ sim = system.run(steps=20000, vectors=True)   # animates LIVE as it runs
 In a Jupyter notebook the box appears and starts moving immediately — no separate
 `show()` step and no HTML file. Particles are auto-sized to be big and easy to see
 (and drawn at their true collision size); `vectors=True` overlays velocity arrows.
+
+Real gas particles move at hundreds of m/s, far too fast to watch, so playback is
+paced by a `speed` knob rather than shown at true speed: at the default `speed=1`
+a typical particle takes a few seconds to cross the box. `speed=3` plays three
+times faster, `speed=0.3` about three times slower -- this only changes the
+*display* pace, never the underlying physics (energy, pressure, temperature are
+computed from the real SI dynamics regardless of `speed`).
+
 `run()` still returns a `Simulation` you can analyse:
 
 ```python

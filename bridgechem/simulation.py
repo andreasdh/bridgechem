@@ -81,14 +81,16 @@ class Simulation:
                                            self.area)
 
     # -- visualisation ------------------------------------------------------
-    def show(self, color_by="speed", vectors=False, fps=30, figsize=(6, 6)):
+    def show(self, color_by="speed", vectors=False, fps=30, speed=1.0,
+             figsize=(6, 6)):
         """Replay the recorded trajectory as a live animation (no HTML file).
 
         Updates a single figure in place, so it works with the default inline
-        matplotlib backend in Jupyter with no extra setup.
+        matplotlib backend in Jupyter with no extra setup. ``speed`` rescales
+        the playback pace (2.0 = twice as fast, 0.5 = half as fast).
         """
         return viz.replay(self, color_by=color_by, vectors=vectors, fps=fps,
-                          figsize=figsize)
+                          speed=speed, figsize=figsize)
 
     def histogram(self, quantity="speeds", frame=-1, bins=40,
                   compare_maxwell_boltzmann=True, ax=None):

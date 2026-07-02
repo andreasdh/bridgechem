@@ -182,7 +182,7 @@ class Box:
     # -- batch run ----------------------------------------------------------
     def run(self, steps=1000, *, t=None, dt=None, sample_every=None,
             method="hard-sphere", animate=None, vectors=False,
-            color_by="speed", fps=30, figsize=(6, 6)):
+            color_by="speed", fps=30, speed=1.0, figsize=(6, 6)):
         """Run the simulation and return a :class:`Simulation` with the trajectory.
 
         In a Jupyter notebook the simulation animates **live** as it integrates
@@ -196,7 +196,8 @@ class Box:
         dt : float, optional
             Time step in seconds. Chosen automatically if omitted.
         sample_every : int, optional
-            Record a frame every this many steps (auto ~300 frames if omitted).
+            Record a frame every this many steps. Chosen automatically from
+            ``speed`` if omitted -- prefer tuning ``speed`` over this.
         method : str
             "hard-sphere" (default). "velocity-verlet" is accepted and behaves
             identically until interactions are added, at which point the Verlet
@@ -210,7 +211,16 @@ class Box:
         color_by : None or "speed"
             Colour particles by their speed.
         fps : float
-            Target frames per second for the live animation.
+            Target frames per second for the live animation (visual smoothness
+            only -- does not change how fast the simulation *looks* like it's
+            moving; use ``speed`` for that).
+        speed : float
+            Pedagogical playback speed. At the default ``speed=1`` a
+            mean-speed particle takes a few seconds to cross the box, slow
+            enough to actually follow collisions. ``speed=3`` plays three
+            times faster, ``speed=0.3`` about three times slower. This does
+            not change the physics, only how many physics steps are grouped
+            into each displayed frame.
         """
         if t is not None:
             steps = t
@@ -219,10 +229,17 @@ class Box:
             raise ValueError("method must be 'hard-sphere' or 'velocity-verlet'")
         if dt is None:
             dt = self._auto_dt()
-        if sample_every is None:
-            sample_every = max(1, steps // 300)
 
         from . import viz
+        if sample_every is None:
+            mean_speed = float(np.sqrt(np.sum(self.vel ** 2, axis=1)).mean())
+            sample_every = viz.pick_sample_every(
+                mean_speed, dt, self.Lx, self.Ly, fps=fps, speed=speed,
+            )
+            # cap total stored frames for very long or very fast-playing runs
+            if steps // sample_every + 1 > viz.MAX_LIVE_FRAMES:
+                sample_every = max(sample_every, -(-steps // viz.MAX_LIVE_FRAMES))
+
         if animate is None:
             animate = viz.in_notebook()
 

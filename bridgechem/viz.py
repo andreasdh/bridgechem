@@ -20,6 +20,32 @@ def _nm(x):
     return np.asarray(x) * 1e9
 
 
+# A mean-speed particle crossing the box takes this many wall-clock seconds
+# at speed=1 -- slow enough to actually watch collisions happen, not so slow
+# it gets boring. Tune with the `speed` argument on Box.run()/Simulation.show().
+SECONDS_PER_CROSSING = 6.0
+MAX_LIVE_FRAMES = 3000  # safety cap on stored frames for very long/fast runs
+
+
+def pick_sample_every(mean_speed, dt, Lx, Ly, *, fps=30, speed=1.0,
+                      seconds_per_crossing=SECONDS_PER_CROSSING):
+    """Choose how many physics steps to group into one displayed frame.
+
+    Calibrated so a mean-speed particle crosses the shorter box dimension in
+    about ``seconds_per_crossing / speed`` *wall-clock* seconds, independently
+    of ``fps`` (raising fps makes playback smoother, not faster) and of the
+    box/gas/temperature (a slow gas and a fast gas both look equally
+    watchable). ``speed`` is a plain multiplier: 2.0 plays twice as fast,
+    0.5 half as fast.
+    """
+    if mean_speed <= 0 or dt <= 0 or fps <= 0:
+        return 50
+    crossing_time = min(Lx, Ly) / mean_speed  # simulated seconds to cross the box
+    wallclock_per_crossing = seconds_per_crossing / max(speed, 1e-9)
+    sim_seconds_per_frame = crossing_time / (wallclock_per_crossing * fps)
+    return max(1, round(sim_seconds_per_frame / dt))
+
+
 def in_notebook() -> bool:
     """True if running inside a Jupyter/IPython kernel (not a plain shell)."""
     try:
@@ -159,8 +185,14 @@ def live_run(system, *, dt, steps, sample_every, vectors, color_by, fps,
 # --------------------------------------------------------------------------- #
 # replay a recorded trajectory
 # --------------------------------------------------------------------------- #
-def replay(sim, *, color_by="speed", vectors=False, fps=30, figsize=(6, 6)):
-    """Replay a stored :class:`Simulation` trajectory live (no HTML)."""
+def replay(sim, *, color_by="speed", vectors=False, fps=30, speed=1.0,
+          figsize=(6, 6)):
+    """Replay a stored :class:`Simulation` trajectory live (no HTML).
+
+    ``speed`` rescales the wall-clock pacing of the (already recorded) frames:
+    2.0 plays back twice as fast, 0.5 half as fast. It does not change what
+    was recorded -- use ``speed`` on :meth:`Box.run` for that.
+    """
     import time
     import matplotlib.pyplot as plt
     from IPython.display import display
@@ -179,7 +211,7 @@ def replay(sim, *, color_by="speed", vectors=False, fps=30, figsize=(6, 6)):
                     float(sim.times[0]))
     handle = display(fig, display_id=True)  # None outside a live kernel
 
-    frame_budget = (1.0 / fps) if fps else 0.0
+    frame_budget = (1.0 / (fps * max(speed, 1e-9))) if fps else 0.0
     for f in range(1, sim.n_frames):
         t0 = time.time()
         _update_artists(coll, quiv, title, sim.pos[f], sim.vel[f], color_by,
