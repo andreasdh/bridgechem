@@ -82,15 +82,21 @@ class Simulation:
 
     # -- visualisation ------------------------------------------------------
     def show(self, color_by="speed", vectors=False, fps=30, speed=1.0,
-             figsize=(6, 6)):
-        """Replay the recorded trajectory as a live animation (no HTML file).
+             display_scale=None, figsize=(6, 6)):
+        """Play back the recorded trajectory with play/pause/scrub controls.
 
-        Updates a single figure in place, so it works with the default inline
-        matplotlib backend in Jupyter with no extra setup. ``speed`` rescales
-        the playback pace (2.0 = twice as fast, 0.5 = half as fast).
+        Uses ``ipywidgets.Play`` when available (arrow/slider controls, like a
+        media player, including scrubbing back to inspect a collision); falls
+        back to a simple forward-only autoplay if ipywidgets isn't installed.
+        No HTML file either way. ``speed`` rescales the playback pace (2.0 =
+        twice as fast, 0.5 = half as fast). ``color_by`` is ``None``,
+        ``"speed"`` or ``"mass"``. ``display_scale`` overrides the particle
+        draw size for this call only (default: the size set on the ``Box``).
         """
-        return viz.replay(self, color_by=color_by, vectors=vectors, fps=fps,
-                          speed=speed, figsize=figsize)
+        ds = display_scale if display_scale is not None else self.display_scale
+        return viz.play(self.pos, self.vel, self.times, self.mass, self.radius,
+                        self.Lx, self.Ly, display_scale=ds, vectors=vectors,
+                        color_by=color_by, fps=fps, speed=speed, figsize=figsize)
 
     def histogram(self, quantity="speeds", frame=-1, bins=40,
                   compare_maxwell_boltzmann=True, ax=None):

@@ -1,19 +1,30 @@
-"""Real-time matplotlib visualisation for bridgechem.
+"""Interactive matplotlib visualisation for bridgechem.
 
-The simulation animates *live* while it integrates, updating a single figure in
-place via ``IPython.display`` (``display_id``). This works with the default
-``%matplotlib inline`` backend -- no interactive backend, no ``to_jshtml`` HTML
-blob, and nothing to click after ``run()``: the box appears and starts moving
-immediately.
+The whole trajectory is computed up front (fast, numba-accelerated), then
+played back with play/pause/scrub controls via ``ipywidgets.Play`` -- the
+standard Jupyter pattern for animations -- updating a single figure in place
+via ``IPython.display`` (``display_id``). This works with the default
+``%matplotlib inline`` backend: no interactive backend, no ``to_jshtml`` HTML
+blob, and you can pause and scrub back to inspect a specific collision.
+
+If ``ipywidgets`` isn't installed, playback falls back to a simple
+forward-only autoplay (no pause/scrub). If there is no live notebook kernel at
+all, nothing is displayed but the trajectory is still returned normally.
 
 Particles are drawn as filled circles at their true collision size (times an
 optional ``display_scale``), so what you see is what bounces. Velocity vectors
-can be overlaid as arrows.
+can be overlaid as arrows, and particles can be coloured by instantaneous
+speed or by (fixed) mass -- handy for spotting a mixture set up with
+:meth:`Box.set_mass`.
 """
 
 from __future__ import annotations
 
 import numpy as np
+
+from .constants import AMU
+
+VALID_COLOR_BY = (None, "speed", "mass")
 
 
 def _nm(x):
@@ -24,7 +35,7 @@ def _nm(x):
 # at speed=1 -- slow enough to actually watch collisions happen, not so slow
 # it gets boring. Tune with the `speed` argument on Box.run()/Simulation.show().
 SECONDS_PER_CROSSING = 6.0
-MAX_LIVE_FRAMES = 3000  # safety cap on stored frames for very long/fast runs
+MAX_FRAMES = 3000  # safety cap on stored/played frames for very long/fast runs
 
 
 def pick_sample_every(mean_speed, dt, Lx, Ly, *, fps=30, speed=1.0,
@@ -62,7 +73,8 @@ def in_notebook() -> bool:
 # scene construction / per-frame updates
 # --------------------------------------------------------------------------- #
 def _setup_scene(Lx, Ly, radius, display_scale, *, vectors, color_by,
-                 figsize, mean_speed, vmax):
+                 figsize, mean_speed, color_static=None, vmin=0.0, vmax=1.0,
+                 color_label=""):
     import matplotlib.pyplot as plt
     from matplotlib.collections import EllipseCollection
 
@@ -82,12 +94,13 @@ def _setup_scene(Lx, Ly, radius, display_scale, *, vectors, color_by,
         offsets=np.zeros((len(diameters), 2)), offset_transform=ax.transData,
         edgecolors="black", linewidths=0.5, zorder=2,
     )
-    if color_by == "speed":
+    if color_by:
         coll.set_cmap("plasma")
-        coll.set_clim(0, vmax)
-        coll.set_array(np.zeros(len(diameters)))
+        coll.set_clim(vmin, vmax)
+        coll.set_array(color_static if color_static is not None
+                       else np.zeros(len(diameters)))
         cbar = fig.colorbar(coll, ax=ax, fraction=0.046, pad=0.04)
-        cbar.set_label("speed (m/s)")
+        cbar.set_label(color_label)
     else:
         coll.set_facecolor("tab:blue")
     ax.add_collection(coll)
@@ -112,6 +125,7 @@ def _update_artists(coll, quiv, title, pos, vel, color_by, time_s):
     coll.set_offsets(_nm(pos))
     if color_by == "speed":
         coll.set_array(np.sqrt(np.sum(vel ** 2, axis=-1)))
+    # color_by == "mass" is static (set once at scene setup); nothing to do.
     if quiv is not None:
         quiv.set_offsets(_nm(pos))
         quiv.set_UVC(vel[:, 0], vel[:, 1])
@@ -120,109 +134,102 @@ def _update_artists(coll, quiv, title, pos, vel, color_by, time_s):
 
 
 # --------------------------------------------------------------------------- #
-# live run (integrate + animate together)
+# interactive playback (play / pause / scrub)
 # --------------------------------------------------------------------------- #
-def live_run(system, *, dt, steps, sample_every, vectors, color_by, fps,
-             figsize):
-    """Integrate ``system`` while animating live; return the trajectory arrays.
+def play(pos, vel, times, mass, radius, Lx, Ly, *, display_scale=1.0,
+         vectors=False, color_by="speed", fps=30, speed=1.0, figsize=(6, 6)):
+    """Play back a trajectory with play/pause/scrub controls (no HTML file).
 
-    The system's own ``pos``/``vel`` arrays are advanced in place (same as the
-    headless path), recording a frame every ``sample_every`` steps.
+    ``pos``/``vel`` are ``(n_frames, N, 2)`` arrays, ``times`` is ``(n_frames,)``.
+    Uses ``ipywidgets.Play`` when available; falls back to a simple
+    forward-only autoplay (no pause) if it isn't installed. Returns the
+    ``ipywidgets.Play`` widget (for tests / further wiring), or ``None`` if
+    nothing could be displayed (e.g. outside a notebook).
     """
-    import time
-    import matplotlib.pyplot as plt
-    from IPython.display import display
+    if color_by not in VALID_COLOR_BY:
+        raise ValueError(f"color_by must be one of {VALID_COLOR_BY}")
 
-    from . import analysis, kernels
+    n_frames = pos.shape[0]
+    color_static, vmin, vmax, color_label = None, 0.0, 1.0, ""
+    color_by_render = color_by
+    if color_by == "speed":
+        all_speeds = np.sqrt(np.sum(vel ** 2, axis=-1))
+        vmax = float(all_speeds.max()) if all_speeds.size else 1.0
+        color_label = "speed (m/s)"
+    elif color_by == "mass":
+        mass_amu = np.asarray(mass) / AMU
+        vmin, vmax = float(mass_amu.min()), float(mass_amu.max())
+        color_label = "mass (amu)"
+        if vmin == vmax:
+            color_by_render = None  # uniform mass: nothing to colour by
+        else:
+            color_static = mass_amu
 
-    N = system.N
-    n_frames = steps // sample_every + 1
-    traj_pos = np.empty((n_frames, N, 2))
-    traj_vel = np.empty((n_frames, N, 2))
-    times = np.empty(n_frames)
-    total_impulse = np.zeros(2)
-
-    mean_v = float(analysis.speeds(system.vel).mean())
-    vmax = 2.5 * mean_v if mean_v > 0 else 1.0
+    mean_v = float(np.sqrt(np.sum(vel[0] ** 2, axis=-1)).mean()) if vel.size else 0.0
     fig, ax, coll, quiv, title = _setup_scene(
-        system.Lx, system.Ly, system.radius, system.display_scale,
-        vectors=vectors, color_by=color_by, figsize=figsize,
-        mean_speed=mean_v, vmax=vmax,
+        Lx, Ly, radius, display_scale, vectors=vectors, color_by=color_by_render,
+        figsize=figsize, mean_speed=mean_v, color_static=color_static,
+        vmin=vmin, vmax=vmax, color_label=color_label,
     )
+    _update_artists(coll, quiv, title, pos[0], vel[0], color_by_render,
+                    float(times[0]) if times.size else None)
 
-    traj_pos[0] = system.pos
-    traj_vel[0] = system.vel
-    times[0] = 0.0
-    _update_artists(coll, quiv, title, system.pos, system.vel, color_by, 0.0)
+    import matplotlib.pyplot as plt
+    try:
+        from IPython.display import display
+    except ImportError:
+        plt.close(fig)
+        return None  # nothing to display outside IPython
+
     handle = display(fig, display_id=True)  # None outside a live kernel
 
-    frame_budget = (1.0 / fps) if fps else 0.0
-    for f in range(1, n_frames):
-        t0 = time.time()
-        imp = kernels._run_chunk(
-            system.pos, system.vel, system.radius, system.inv_mass,
-            system.Lx, system.Ly, dt, sample_every, system.periodic,
-        )
-        total_impulse += imp
-        traj_pos[f] = system.pos
-        traj_vel[f] = system.vel
-        times[f] = f * sample_every * dt
+    try:
+        import ipywidgets as widgets
+    except ImportError:
+        _autoplay_fallback(fig, handle, coll, quiv, title, pos, vel, times,
+                           color_by_render, fps, speed)
+        return None
 
-        _update_artists(coll, quiv, title, system.pos, system.vel, color_by,
-                        times[f])
+    interval_ms = (max(1, round(1000.0 / (fps * max(speed, 1e-9))))
+                  if fps and fps > 0 else 1)
+    play_widget = widgets.Play(min=0, max=n_frames - 1, step=1,
+                               interval=interval_ms, value=0)
+    slider = widgets.IntSlider(min=0, max=n_frames - 1, value=0,
+                               description="frame")
+    widgets.jslink((play_widget, "value"), (slider, "value"))
+
+    def on_change(change):
+        f = change["new"]
+        _update_artists(coll, quiv, title, pos[f], vel[f], color_by_render,
+                        float(times[f]) if times.size else None)
         fig.canvas.draw_idle()
         if handle is not None:
             handle.update(fig)
 
-        rest = frame_budget - (time.time() - t0)
-        if rest > 0:
-            time.sleep(rest)
-
-    plt.close(fig)
-    return traj_pos, traj_vel, times, total_impulse
+    play_widget.observe(on_change, names="value")
+    display(widgets.HBox([play_widget, slider]))
+    return play_widget
 
 
-# --------------------------------------------------------------------------- #
-# replay a recorded trajectory
-# --------------------------------------------------------------------------- #
-def replay(sim, *, color_by="speed", vectors=False, fps=30, speed=1.0,
-          figsize=(6, 6)):
-    """Replay a stored :class:`Simulation` trajectory live (no HTML).
-
-    ``speed`` rescales the wall-clock pacing of the (already recorded) frames:
-    2.0 plays back twice as fast, 0.5 half as fast. It does not change what
-    was recorded -- use ``speed`` on :meth:`Box.run` for that.
-    """
+def _autoplay_fallback(fig, handle, coll, quiv, title, pos, vel, times,
+                       color_by, fps, speed):
+    """Forward-only autoplay used when ipywidgets isn't installed."""
     import time
     import matplotlib.pyplot as plt
-    from IPython.display import display
 
-    from . import analysis
-
-    mean_v = float(analysis.speeds(sim.vel).mean())
-    vmax = float(analysis.speeds(sim.vel).max()) if sim.vel.size else 1.0
-    fig, ax, coll, quiv, title = _setup_scene(
-        sim.Lx, sim.Ly, sim.radius, sim.display_scale,
-        vectors=vectors, color_by=color_by, figsize=figsize,
-        mean_speed=mean_v, vmax=vmax,
-    )
-
-    _update_artists(coll, quiv, title, sim.pos[0], sim.vel[0], color_by,
-                    float(sim.times[0]))
-    handle = display(fig, display_id=True)  # None outside a live kernel
-
+    print("Tip: install ipywidgets for play/pause/scrub controls "
+          "(pip install ipywidgets).")
     frame_budget = (1.0 / (fps * max(speed, 1e-9))) if fps else 0.0
-    for f in range(1, sim.n_frames):
+    for f in range(1, pos.shape[0]):
         t0 = time.time()
-        _update_artists(coll, quiv, title, sim.pos[f], sim.vel[f], color_by,
-                        float(sim.times[f]))
+        _update_artists(coll, quiv, title, pos[f], vel[f], color_by,
+                        float(times[f]) if times.size else None)
         fig.canvas.draw_idle()
         if handle is not None:
             handle.update(fig)
         rest = frame_budget - (time.time() - t0)
         if rest > 0:
             time.sleep(rest)
-
     plt.close(fig)
 
 

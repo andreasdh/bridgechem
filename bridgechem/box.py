@@ -65,7 +65,7 @@ class Box:
         dilute point-like gas, pass a small explicit radius.
     packing : float
         Target fraction of the box area covered by particles, used to pick the
-        default radius (ignored if ``radius`` is given). ~0.15 gives a lively,
+        default radius (ignored if ``radius`` is given). ~0.10 gives a lively,
         clearly visible gas.
     temperature : float
         Initial temperature in K (used to sample velocities).
@@ -83,7 +83,7 @@ class Box:
     """
 
     def __init__(self, N, size=(20.0, 20.0), *, gas=DEFAULT_GAS, mass=None,
-                 radius=None, packing=0.15, temperature=300.0,
+                 radius=None, packing=0.10, temperature=300.0,
                  boundary="reflective", velocity_init="thermal",
                  display_scale=1.0, dim=2, seed=None):
         if dim != 2:
@@ -147,6 +147,30 @@ class Box:
     def area(self):
         return self.Lx * self.Ly
 
+    def set_mass(self, mass=None, *, gas=None, indices=None):
+        """Set the mass of some or all particles, for mixtures.
+
+        Pass exactly one of ``mass`` (a number or per-particle array, in amu)
+        or ``gas`` (a reference gas name, e.g. ``"helium"``). ``indices``
+        selects which particles to change (default: all) -- e.g. an array or
+        boolean mask to make half the gas heavier and watch differential
+        diffusion. Existing velocities are left untouched, so a particle's
+        kinetic energy (and its contribution to the measured temperature)
+        changes immediately; collisions will re-equilibrate the mixture over
+        time.
+        """
+        if (mass is None) == (gas is None):
+            raise ValueError("pass exactly one of `mass` or `gas`")
+        m_kg = gas_properties(gas)["mass_kg"] if gas is not None else np.asarray(mass, dtype=float) * AMU
+        if np.any(np.asarray(m_kg) <= 0):
+            raise ValueError("mass must be positive")
+        if indices is None:
+            self.mass[:] = m_kg
+        else:
+            self.mass[indices] = m_kg
+        self.inv_mass = 1.0 / self.mass
+        return self
+
     def _auto_dt(self, safety=0.2):
         """Pick a time step small enough to avoid tunnelling through particles."""
         vmax = np.sqrt(np.sum(self.vel ** 2, axis=1)).max()
@@ -182,12 +206,14 @@ class Box:
     # -- batch run ----------------------------------------------------------
     def run(self, steps=1000, *, t=None, dt=None, sample_every=None,
             method="hard-sphere", animate=None, vectors=False,
-            color_by="speed", fps=30, speed=1.0, figsize=(6, 6)):
+            color_by="speed", fps=30, speed=1.0, display_scale=None,
+            figsize=(6, 6)):
         """Run the simulation and return a :class:`Simulation` with the trajectory.
 
-        In a Jupyter notebook the simulation animates **live** as it integrates
-        (the box appears immediately, no separate ``show()`` call and no HTML
-        file). Outside a notebook it runs headless.
+        The whole trajectory is computed first (numba-accelerated, typically
+        well under a second), then -- in a Jupyter notebook -- displayed with
+        play/pause/scrub controls (no HTML file, nothing extra to install
+        beyond ``ipywidgets``). Outside a notebook it just runs headless.
 
         Parameters
         ----------
@@ -203,17 +229,17 @@ class Box:
             identically until interactions are added, at which point the Verlet
             integrator drives the forces.
         animate : bool, optional
-            Show the live animation. Defaults to True inside a notebook, False
-            otherwise. Set False to run as fast as possible and inspect the
-            trajectory afterwards.
+            Display the trajectory with play/pause controls. Defaults to True
+            inside a notebook, False otherwise.
         vectors : bool
             Draw a velocity arrow on each particle.
-        color_by : None or "speed"
-            Colour particles by their speed.
+        color_by : None, "speed" or "mass"
+            Colour particles by their instantaneous speed, or by (fixed)
+            particle mass -- handy after :meth:`set_mass` to spot a mixture.
         fps : float
-            Target frames per second for the live animation (visual smoothness
-            only -- does not change how fast the simulation *looks* like it's
-            moving; use ``speed`` for that).
+            Target frames per second (visual smoothness only -- does not
+            change how fast the simulation *looks* like it's moving; use
+            ``speed`` for that).
         speed : float
             Pedagogical playback speed. At the default ``speed=1`` a
             mean-speed particle takes a few seconds to cross the box, slow
@@ -221,6 +247,9 @@ class Box:
             times faster, ``speed=0.3`` about three times slower. This does
             not change the physics, only how many physics steps are grouped
             into each displayed frame.
+        display_scale : float, optional
+            Visual size multiplier for drawn particles, overriding the box's
+            default for this call.
         """
         if t is not None:
             steps = t
@@ -237,31 +266,30 @@ class Box:
                 mean_speed, dt, self.Lx, self.Ly, fps=fps, speed=speed,
             )
             # cap total stored frames for very long or very fast-playing runs
-            if steps // sample_every + 1 > viz.MAX_LIVE_FRAMES:
-                sample_every = max(sample_every, -(-steps // viz.MAX_LIVE_FRAMES))
+            if steps // sample_every + 1 > viz.MAX_FRAMES:
+                sample_every = max(sample_every, -(-steps // viz.MAX_FRAMES))
 
-        if animate is None:
-            animate = viz.in_notebook()
-
-        if animate:
-            traj_pos, traj_vel, times, impulse = viz.live_run(
-                self, dt=dt, steps=steps, sample_every=sample_every,
-                vectors=vectors, color_by=color_by, fps=fps, figsize=figsize,
-            )
-        else:
-            traj_pos, traj_vel, times, impulse = kernels._simulate(
-                self.pos, self.vel, self.radius, self.inv_mass,
-                self.Lx, self.Ly, dt, steps, sample_every, self.periodic,
-            )
+        traj_pos, traj_vel, times, impulse = kernels._simulate(
+            self.pos, self.vel, self.radius, self.inv_mass,
+            self.Lx, self.Ly, dt, steps, sample_every, self.periodic,
+        )
         # update live state to the end of the run
         self.pos = traj_pos[-1].copy()
         self.vel = traj_vel[-1].copy()
 
-        return Simulation(
+        sim = Simulation(
             traj_pos, traj_vel, times, impulse,
             mass=self.mass, radius=self.radius, Lx=self.Lx, Ly=self.Ly,
-            dim=self.dim, periodic=self.periodic, display_scale=self.display_scale,
+            dim=self.dim, periodic=self.periodic,
+            display_scale=display_scale if display_scale is not None else self.display_scale,
         )
+
+        if animate is None:
+            animate = viz.in_notebook()
+        if animate:
+            sim.show(color_by=color_by, vectors=vectors, fps=fps, speed=speed,
+                    figsize=figsize)
+        return sim
 
     # -- future milestones --------------------------------------------------
     def add_interactions(self, interaction="LJ", **params):

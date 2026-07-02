@@ -21,13 +21,15 @@ classifiers = [
 dependencies = [
     "numpy>=1.21",
     "matplotlib>=3.4",
+    "ipython>=7.0",
+    "ipywidgets>=7.0",
 ]
 
 [project.optional-dependencies]
 # numba is strongly recommended for realistic system sizes, but the package
 # runs (slowly) without it thanks to a pure-Python fallback in kernels.py.
 fast = ["numba>=0.56"]
-dev = ["pytest>=7.0", "numba>=0.56", "ipython>=7.0"]
+dev = ["pytest>=7.0", "numba>=0.56"]
 
 [tool.setuptools.packages.find]
 include = ["bridgechem*"]

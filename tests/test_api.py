@@ -81,3 +81,41 @@ def test_add_interactions_not_yet_implemented():
     system = bc.box(N=10, size=(20, 20))
     with pytest.raises(NotImplementedError):
         system.add_interactions("LJ")
+
+
+def test_set_mass_by_value_all_particles():
+    system = bc.box(N=20, size=(20, 20), gas="argon")
+    system.set_mass(50.0)
+    assert np.allclose(system.mass / bc.constants.AMU, 50.0)
+    assert np.allclose(system.inv_mass, 1.0 / system.mass)
+
+
+def test_set_mass_by_indices_creates_mixture():
+    system = bc.box(N=20, size=(20, 20), gas="argon")
+    original_amu = (system.mass / bc.constants.AMU).copy()
+    system.set_mass(80.0, indices=slice(0, 5))
+    new_amu = system.mass / bc.constants.AMU
+    assert np.allclose(new_amu[:5], 80.0)
+    assert np.allclose(new_amu[5:], original_amu[5:])
+
+
+def test_set_mass_by_gas_name():
+    system = bc.box(N=10, size=(20, 20), gas="argon")
+    system.set_mass(gas="helium")
+    assert np.isclose(system.mass[0] / bc.constants.AMU, 4.0026, rtol=1e-3)
+
+
+def test_set_mass_requires_exactly_one_of_mass_or_gas():
+    system = bc.box(N=10, size=(20, 20))
+    with pytest.raises(ValueError):
+        system.set_mass()
+    with pytest.raises(ValueError):
+        system.set_mass(mass=10.0, gas="helium")
+
+
+def test_set_mass_rejects_nonpositive():
+    system = bc.box(N=10, size=(20, 20))
+    with pytest.raises(ValueError):
+        system.set_mass(-5.0)
+    with pytest.raises(ValueError):
+        system.set_mass(0.0)

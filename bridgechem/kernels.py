@@ -199,16 +199,3 @@ def _simulate(pos, vel, radius, inv_mass, Lx, Ly, dt, n_steps, sample_every,
             frame += 1
 
     return traj_pos[:frame], traj_vel[:frame], times[:frame], impulse
-
-
-@njit
-def _run_chunk(pos, vel, radius, inv_mass, Lx, Ly, dt, n_steps, periodic):
-    """Advance ``n_steps`` steps in place and return the wall impulse.
-
-    Used by the real-time viewer: Python drives one call per animation frame,
-    so the inner steps stay compiled while display happens between frames.
-    """
-    impulse = np.zeros(2)
-    for _ in range(n_steps):
-        _step(pos, vel, radius, inv_mass, Lx, Ly, dt, periodic, impulse)
-    return impulse

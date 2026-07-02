@@ -15,11 +15,13 @@ theory for simple real systems.
 ## Install
 
 ```bash
-pip install -e ".[dev]"     # numpy, matplotlib, numba, pytest
+pip install -e ".[dev]"     # numpy, matplotlib, ipywidgets, numba, pytest
 ```
 
 numba is optional but strongly recommended: the hot loops fall back to pure
-Python if it is missing (much slower, but everything still runs).
+Python if it is missing (much slower, but everything still runs). ipywidgets
+is needed for play/pause controls; without it, playback falls back to a
+simple forward-only autoplay.
 
 ## Quick start
 
@@ -27,12 +29,15 @@ Python if it is missing (much slower, but everything still runs).
 import bridgechem as bc
 
 system = bc.box(N=200, size=(40, 40))    # 40 nm x 40 nm box of argon at 300 K
-sim = system.run(steps=20000, vectors=True)   # animates LIVE as it runs
+sim = system.run(steps=20000, vectors=True)
 ```
 
-In a Jupyter notebook the box appears and starts moving immediately — no separate
-`show()` step and no HTML file. Particles are auto-sized to be big and easy to see
-(and drawn at their true collision size); `vectors=True` overlays velocity arrows.
+The whole trajectory is computed first (numba-accelerated, typically under a
+second), then displayed in a Jupyter notebook with **play / pause / scrub**
+controls (an `ipywidgets.Play` widget) — no HTML file, no separate `show()`
+call needed, and you can pause and drag the slider back to inspect a specific
+collision. Particles are auto-sized to be big and easy to see (and drawn at
+their true collision size); `vectors=True` overlays velocity arrows.
 
 Real gas particles move at hundreds of m/s, far too fast to watch, so playback is
 paced by a `speed` knob rather than shown at true speed: at the default `speed=1`
@@ -47,7 +52,8 @@ computed from the real SI dynamics regardless of `speed`).
 sim.histogram("speeds")                  # compare with Maxwell-Boltzmann
 sim.calculate("pressure")                # 2D pressure (N/m) from wall collisions
 sim.calculate("temperature")             # per-frame temperature (K)
-sim.show()                               # replay the recorded run (also live)
+sim.show()                               # replay the recorded run, with controls
+sim.show(color_by="mass", display_scale=1.5)  # colour by mass, bigger particles
 ```
 
 Use `animate=False` to run headless at full speed (e.g. for pressure statistics),
@@ -77,8 +83,13 @@ couple of chemistry-friendly *input* units, converted to SI immediately:
 - A 2D box of hard spheres with **reflective** (default) or **periodic** walls.
 - Elastic particle–particle and particle–wall collisions (energy- and
   momentum-conserving).
-- **Live, real-time animation** in Jupyter (default inline backend, no HTML),
+- **Interactive playback** in Jupyter (default inline backend, no HTML): play,
+  pause, and scrub through the trajectory with an `ipywidgets.Play` widget,
   with big, auto-sized particles and optional velocity-vector arrows.
+- Colour particles by instantaneous **speed** or by (fixed) **mass**
+  (`color_by="mass"`, after `system.set_mass(...)`).
+- `system.set_mass(mass, indices=...)` to build a mixture -- e.g. a light/heavy
+  pair to watch differential collision behaviour.
 - Velocities initialised from Maxwell–Boltzmann, or all at the same speed to
   watch a distribution *relax* to equilibrium.
 - Analysis: speeds, temperature, kinetic energy, and pressure (with the 2D
