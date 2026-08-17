@@ -317,6 +317,8 @@ def _setup_scene_3d(L, radius, display_scale, *, vectors, color_by,
         coll.set_clim(vmin, vmax)
         coll.set_array(color_static if color_static is not None
                        else np.zeros(n))
+        cbar = fig.colorbar(coll, ax=ax, fraction=0.046, pad=0.04)
+        cbar.set_label(color_label)
     else:
         coll.set_color("tab:blue")
 
@@ -468,18 +470,30 @@ def play(pos, vel, times, mass, radius, L, *, display_scale=1.0,
         # Live canvas: no PNG round trip. 2D blits (fastest); mplot3d has no
         # draw_artist support, so 3D just redraws in place -- still far
         # cheaper than re-encoding a PNG every frame, and it's what makes the
-        # scene mouse-rotatable while playing or paused.
-        display(fig.canvas)
+        # scene mouse-rotatable while playing or paused. Frame 0 must be
+        # rendered *before* display(fig.canvas): the widget mounts showing
+        # whatever's already in the canvas buffer, so displaying it first
+        # means it mounts blank and only catches up on the next tick.
         if full_3d:
-            # draw_idle() only *schedules* a redraw and returns immediately,
-            # so it can't be timed directly -- draw() forces the same work
-            # synchronously, giving a real measurement of the per-frame cost.
+            # A synchronous draw() each frame, not draw_idle(). ipympl's
+            # draw_idle() doesn't render anything itself -- it only sends a
+            # "please redraw" request to the *frontend* and waits for it to
+            # ask back before the backend actually renders and pushes a
+            # frame (see ipympl.backend_nbagg.Canvas.send_json /
+            # FigureCanvasWebAggCore.draw_idle). That round trip can stall
+            # under a fast run of Play-widget ticks -- symptom: playback
+            # silently freezes partway through while the Play widget's own
+            # frame counter keeps advancing. draw() renders and pushes
+            # directly, no negotiation with the frontend required. 3D isn't
+            # blitted anyway, so there's no performance cost to going
+            # synchronous (blit() has this same direct-push property, which
+            # is why the 2D path below was never affected).
             t0 = time.time()
             fig.canvas.draw()
             render_time = time.time() - t0
 
             def push(f):
-                fig.canvas.draw_idle()
+                fig.canvas.draw()
         else:
             artists = [a for a in (coll, quiv_holder[0], title) if a is not None]
             bg = _setup_blit(fig, artists)  # one-time full draw, not timed
@@ -490,6 +504,8 @@ def play(pos, vel, times, mass, radius, L, *, display_scale=1.0,
             def push(f):
                 _blit_frame(fig, ax, bg, [a for a in (coll, quiv_holder[0], title)
                                           if a is not None])
+
+        display(fig.canvas)
     else:
         # Static (inline / headless) fallback: redraw the whole figure to a
         # PNG and push it as a fresh display update. Real, fairly fixed cost
