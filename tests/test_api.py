@@ -4,6 +4,14 @@ import numpy as np
 import pytest
 
 import bridgechem as bc
+from bridgechem import kernels
+
+
+def test_numba_is_available():
+    # numba is a required dependency (not optional): the pure-Python fallback
+    # in kernels.py exists as a last resort, not the intended path, so a
+    # normal install should always get the JIT-compiled kernels.
+    assert kernels.HAVE_NUMBA is True
 
 
 def test_box_construction_and_units():

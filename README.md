@@ -21,13 +21,14 @@ theory for simple real systems.
 ## Install
 
 ```bash
-pip install -e ".[dev]"     # numpy, matplotlib, ipywidgets, numba, pytest
+pip install -e ".[dev]"     # numpy, matplotlib, ipywidgets, numba, ipympl, pytest
 ```
 
-numba is optional but strongly recommended: the hot loops fall back to pure
-Python if it is missing (much slower, but everything still runs). ipywidgets
-is needed for play/pause controls; without it, playback falls back to a
-simple forward-only autoplay.
+numba and ipympl are required: numba JIT-compiles the physics (a pure-Python
+fallback exists as a last resort, but is much slower and not the intended
+path), and ipympl is what makes playback live and 3D scenes rotatable inside
+Jupyter -- see "Playback" below. ipywidgets is needed for play/pause/scrub
+controls; without it, playback falls back to a simple forward-only autoplay.
 
 ## Quick start
 
@@ -55,10 +56,35 @@ computed from the real SI dynamics regardless of `speed`).
 Redrawing a figure and shipping it to the browser has real, fairly fixed cost
 (tens of milliseconds) that has nothing to do with the physics. `fps` is
 therefore only a *target*: on the first frame we measure how fast this machine
-can actually redraw+encode, and never promise more than that -- asking the
+can actually push a frame, and never promise more than that -- asking the
 `Play` widget to tick faster than the kernel can draw is what causes stutter
 (and can make played-back frames appear to arrive out of order). If playback
 still looks choppy, pass a lower `fps` explicitly.
+
+### Playback: live 2D, rotatable 3D
+
+Inside a real Jupyter kernel, `bridgechem` switches to the `ipympl`
+(`%matplotlib widget`) backend the first time you call `run()`/`show()`
+(unless you've already picked a backend yourself) and drives its live canvas
+directly, instead of the default `%matplotlib inline` behaviour of
+re-rendering the whole figure to a PNG and shipping a fresh image every
+frame. That per-frame PNG round trip -- not the physics -- is what causes
+choppy playback; on the live canvas, 2D playback is true-blitted (only the
+particles redraw, not the axes/labels/colorbar) and 3D playback redraws in
+place without ever leaving Python.
+
+A **3D box gets a real, mouse-rotatable 3D scene** by default -- drag to spin
+it, even mid-playback -- not a 2D projection that flattens the z-axis (which
+is why particles at different depths used to pile up into a chaotic mess on
+screen: nothing actually overlapped in 3D, the projection just discarded the
+coordinate that would have kept them apart). Pass `slab=2.0` to
+`run()`/`show()` instead to view a thin 2 nm slice through the middle of the
+box in 2D, when a full 3D view is too busy to read at a glance and you'd
+rather see a single plane where every collision on screen really is one.
+
+Outside a live kernel (a script, a test, or without `ipympl` installed)
+playback falls back to the old PNG-per-frame approach, which still works
+everywhere -- just without blitting or rotation.
 
 `run()` still returns a `Simulation` you can analyse:
 
@@ -140,14 +166,15 @@ particles bind together) alongside `sim.calculate("temperature")`.
 
 ## What's implemented
 
-- A 2D box of hard spheres with **reflective** (default) or **periodic** walls,
-  or (once `add_interactions` is called) continuous Lennard-Jones forces
-  integrated with velocity-Verlet.
+- A 2D or 3D box of hard spheres with **reflective** (default) or **periodic**
+  walls, or (once `add_interactions` is called) continuous Lennard-Jones
+  forces integrated with velocity-Verlet.
 - Elastic particle–particle and particle–wall collisions (energy- and
   momentum-conserving) for the hard-sphere engine.
-- **Interactive playback** in Jupyter (default inline backend, no HTML): play,
-  pause, and scrub through the trajectory with an `ipywidgets.Play` widget,
-  with big, auto-sized particles and optional velocity-vector arrows.
+- **Interactive playback** in Jupyter (live `ipympl` canvas, no HTML file):
+  play, pause, and scrub through the trajectory with an `ipywidgets.Play`
+  widget, with big, auto-sized particles and optional velocity-vector arrows.
+  2D playback is true-blitted; a 3D box gets a real, mouse-rotatable 3D scene.
 - Colour particles by instantaneous **speed** or by (fixed) **mass**
   (`color_by="mass"`, after `system.set_mass(...)`).
 - `system.set_mass(mass, indices=...)` to build a mixture -- e.g. a light/heavy
@@ -169,7 +196,6 @@ See [`examples/demo.ipynb`](examples/demo.ipynb) for a guided tour.
 ## Roadmap
 
 - Custom pairwise potentials beyond Lennard-Jones.
-- **3D** boxes and richer visualisation.
 
 ## Development
 

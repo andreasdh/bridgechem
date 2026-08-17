@@ -1,24 +1,36 @@
 """Interactive matplotlib visualisation for bridgechem.
 
 The whole trajectory is computed up front (fast, numba-accelerated), then
-played back with play/pause/scrub controls via ``ipywidgets.Play`` -- the
-standard Jupyter pattern for animations -- updating a single figure in place
-via ``IPython.display`` (``display_id``). This works with the default
-``%matplotlib inline`` backend: no interactive backend, no ``to_jshtml`` HTML
-blob, and you can pause and scrub back to inspect a specific collision.
+played back with play/pause/scrub controls via ``ipywidgets.Play``.
+
+**Live playback.** Inside a real Jupyter kernel, :func:`play` switches to the
+``ipympl`` (``%matplotlib widget``) backend the first time it's called (unless
+you've already picked a backend yourself) and drives a *live* canvas instead
+of the default ``%matplotlib inline`` behaviour of re-rendering the whole
+figure to a PNG and shipping a fresh image every frame. In 2D this means true
+blitting -- only the particles (not the axes, labels, colorbar) are redrawn
+each frame -- which is what actually fixes choppy playback: the PNG round
+trip, not the physics, was the bottleneck. Outside a live kernel (a script, a
+test, or if ``ipympl`` isn't installed) playback falls back to the old
+PNG-per-frame approach, which still works everywhere.
+
+**2D vs 3D.** The box's dimension (``len(size)`` at construction) decides the
+scene: a 2D box gets the flat, blitted view above. A 3D box gets a real,
+mouse-rotatable ``Axes3D`` scatter -- an actual 3D scene, not a 2D projection
+that drops the z-coordinate (a full-3D box no longer hides particles behind
+each other the way a projection would; nothing is being flattened, only drawn
+in perspective). Pass ``slab=<nm>`` to force the old thin-slice 2D view of a
+3D run instead, when you specifically want to see collisions in a single
+plane rather than a rotatable overview.
 
 If ``ipywidgets`` isn't installed, playback falls back to a simple
 forward-only autoplay (no pause/scrub). If there is no live notebook kernel at
 all, nothing is displayed but the trajectory is still returned normally.
-
-Particles are drawn as filled circles at their true collision size (times an
-optional ``display_scale``), so what you see is what bounces. Velocity vectors
-can be overlaid as arrows, and particles can be coloured by instantaneous
-speed or by (fixed) mass -- handy for spotting a mixture set up with
-:meth:`Box.set_mass`.
 """
 
 from __future__ import annotations
+
+import time
 
 import numpy as np
 
@@ -34,10 +46,11 @@ def _nm(x):
 def _project(pos, slab_window=None):
     """Screen coordinates: the x-y components, in nm.
 
-    A 3D box is drawn as its x-y projection. If ``slab_window`` is given as
-    ``(z_low, z_high)`` in metres, particles outside that slice are moved to
-    NaN, which matplotlib simply does not draw -- so what remains on screen is
-    a thin sheet of gas whose apparent collisions are real ones.
+    Used for the 2D scene, and for the ``slab``-restricted 2D view of a 3D
+    box. If ``slab_window`` is given as ``(z_low, z_high)`` in metres,
+    particles outside that slice are moved to NaN, which matplotlib simply
+    does not draw -- so what remains on screen is a thin sheet of gas whose
+    apparent collisions are real ones.
     """
     xy = _nm(pos[:, :2])
     if slab_window is not None and pos.shape[1] > 2:
@@ -95,7 +108,61 @@ def in_notebook() -> bool:
 
 
 # --------------------------------------------------------------------------- #
-# scene construction / per-frame updates
+# backend management: switch to a live (ipympl) canvas when we can
+# --------------------------------------------------------------------------- #
+_backend_switch_attempted = False
+
+
+def _is_live_backend() -> bool:
+    """True if matplotlib is already on an interactive-canvas backend.
+
+    ``ipympl``/``nbAgg``/``WebAgg`` all push incremental updates to a canvas
+    that stays alive in the notebook, as opposed to ``inline``, which
+    re-renders a static PNG per figure. That live canvas is what lets us
+    blit (2D) or just redraw in place (3D) instead of re-encoding an image
+    every frame.
+    """
+    import matplotlib
+    backend = matplotlib.get_backend().lower()
+    return any(tag in backend for tag in ("ipympl", "nbagg", "webagg"))
+
+
+def _ensure_interactive_backend() -> bool:
+    """Switch to the ``ipympl`` backend if we safely can; return whether live.
+
+    Only acts inside a real Jupyter kernel (:func:`in_notebook`), and only
+    when the backend is still the plain Jupyter default -- so a user who has
+    deliberately chosen a backend (``%matplotlib inline`` explicitly, a GUI
+    backend, ``Agg`` for a headless script, ...) is never overridden. Tried
+    at most once per process: if ``ipympl`` isn't installed we don't keep
+    retrying (or re-printing the tip) on every subsequent call.
+    """
+    global _backend_switch_attempted
+    if _is_live_backend():
+        return True
+    if not in_notebook():
+        return False
+    if _backend_switch_attempted:
+        return False
+    _backend_switch_attempted = True
+
+    import matplotlib
+    if "inline" not in matplotlib.get_backend().lower():
+        return False  # user picked something else on purpose; leave it alone
+
+    try:
+        import ipympl  # noqa: F401
+        import matplotlib.pyplot as plt
+        plt.switch_backend("module://ipympl.backend_nbagg")
+        return True
+    except Exception:
+        print("Tip: install ipympl for smooth, rotatable playback "
+              "(pip install ipympl), then restart the kernel.")
+        return False
+
+
+# --------------------------------------------------------------------------- #
+# 2D scene: particles as an EllipseCollection (true collision-size circles)
 # --------------------------------------------------------------------------- #
 def _setup_scene(L, radius, display_scale, *, vectors, color_by,
                  figsize, mean_speed, color_static=None, vmin=0.0, vmax=1.0,
@@ -161,6 +228,107 @@ def _update_artists(coll, quiv, title, pos, vel, color_by, time_s,
 
 
 # --------------------------------------------------------------------------- #
+# 3D scene: a real, rotatable Axes3D scatter -- not a projection
+# --------------------------------------------------------------------------- #
+def _setup_scene_3d(L, radius, display_scale, *, vectors, color_by,
+                    figsize, mean_speed, color_static=None, vmin=0.0, vmax=1.0,
+                    color_label=""):
+    import matplotlib.pyplot as plt
+
+    Lx_nm, Ly_nm, Lz_nm = (float(x) * 1e9 for x in L)
+    fig = plt.figure(figsize=figsize)
+    ax = fig.add_subplot(projection="3d")
+    ax.set_xlim(0, Lx_nm)
+    ax.set_ylim(0, Ly_nm)
+    ax.set_zlim(0, Lz_nm)
+    ax.set_box_aspect((Lx_nm, Ly_nm, Lz_nm))  # box drawn true-to-scale, not cubical
+    ax.set_xlabel("x (nm)")
+    ax.set_ylabel("y (nm)")
+    ax.set_zlabel("z (nm)")
+
+    # matplotlib's 3D scatter sizes markers in points^2 (screen space), not
+    # data space -- unlike the 2D EllipseCollection it cannot draw a true
+    # data-space circle, so size can't track radius exactly as you zoom or
+    # rotate. This picks a size that looks right at the initial view (a
+    # known mplot3d limitation, not a bug).
+    points_per_nm = (figsize[0] * 72.0) / max(Lx_nm, Ly_nm, Lz_nm)
+    diam_nm = 2.0 * np.asarray(radius) * 1e9 * display_scale
+    sizes = (diam_nm * points_per_nm) ** 2
+
+    n = len(radius)
+    zeros = np.zeros(n)
+    # depthshade=True darkens far particles -- a cheap but real depth cue on
+    # top of the perspective projection, which is what actually makes this
+    # read as 3D rather than a cloud of same-looking dots.
+    coll = ax.scatter(zeros, zeros, zeros, s=sizes, edgecolors="black",
+                      linewidths=0.5, depthshade=True)
+    if color_by:
+        coll.set_cmap("plasma")
+        coll.set_clim(vmin, vmax)
+        coll.set_array(color_static if color_static is not None
+                       else np.zeros(n))
+    else:
+        coll.set_color("tab:blue")
+
+    title = ax.set_title("")
+    return fig, ax, coll, None, title
+
+
+def _update_artists_3d(ax, coll, quiv, title, pos, vel, color_by, time_s,
+                       vectors, mean_speed, L):
+    """Update the 3D scene for one frame; returns the (possibly new) quiver.
+
+    mplot3d offers no in-place update for a 3D quiver, so unlike the 2D
+    ``quiv.set_UVC``, a 3D velocity-vector quiver has to be removed and
+    recreated every frame. That's cheap next to a full redraw but not free,
+    so leave ``vectors=False`` (the default) for the smoothest 3D playback.
+    """
+    xyz = _nm(pos)
+    coll._offsets3d = (xyz[:, 0], xyz[:, 1], xyz[:, 2])
+    if color_by == "speed":
+        coll.set_array(np.sqrt(np.sum(vel ** 2, axis=-1)))
+
+    if quiv is not None:
+        quiv.remove()
+    new_quiv = None
+    if vectors:
+        Lx_nm = float(L[0]) * 1e9
+        target_nm = 0.07 * Lx_nm
+        scale = (target_nm / mean_speed) if mean_speed > 0 else 1.0
+        new_quiv = ax.quiver(
+            xyz[:, 0], xyz[:, 1], xyz[:, 2],
+            vel[:, 0] * scale, vel[:, 1] * scale, vel[:, 2] * scale,
+            color="black", linewidth=1.0, arrow_length_ratio=0.3,
+        )
+    if time_s is not None:
+        title.set_text(f"t = {time_s * 1e12:.2f} ps")
+    return new_quiv
+
+
+# --------------------------------------------------------------------------- #
+# blitting (live 2D backend only -- mplot3d does not support draw_artist)
+# --------------------------------------------------------------------------- #
+def _setup_blit(fig, artists):
+    """Mark artists animated and capture the static background once.
+
+    Order matters: artists must be marked animated *before* this draw, or
+    they'd be baked into the background snapshot and every later blit would
+    show a ghost of frame 0 underneath the live particles.
+    """
+    for a in artists:
+        a.set_animated(True)
+    fig.canvas.draw()
+    return fig.canvas.copy_from_bbox(fig.bbox)
+
+
+def _blit_frame(fig, ax, bg, artists):
+    fig.canvas.restore_region(bg)
+    for a in artists:
+        ax.draw_artist(a)
+    fig.canvas.blit(fig.bbox)
+
+
+# --------------------------------------------------------------------------- #
 # interactive playback (play / pause / scrub)
 # --------------------------------------------------------------------------- #
 def play(pos, vel, times, mass, radius, L, *, display_scale=1.0,
@@ -169,27 +337,34 @@ def play(pos, vel, times, mass, radius, L, *, display_scale=1.0,
     """Play back a trajectory with play/pause/scrub controls (no HTML file).
 
     ``pos``/``vel`` are ``(n_frames, N, dim)`` arrays and ``L`` is ``(dim,)``.
-    A 3D run is drawn as its x-y projection; ``slab`` (nm) restricts the view
-    to a thin slice through the middle of the box so that what you see
-    colliding really is colliding.
+    A 3D run gets a real, rotatable 3D scene by default; pass ``slab`` (nm) to
+    instead view a thin 2D slice through the middle of the box, where every
+    apparent collision on screen really is one.
+
     Uses ``ipywidgets.Play`` when available; falls back to a simple
     forward-only autoplay (no pause) if it isn't installed. Returns the
     ``ipywidgets.Play`` widget (for tests / further wiring), or ``None`` if
     nothing could be displayed (e.g. outside a notebook).
 
-    Redrawing a matplotlib figure and shipping it to the browser as a PNG has
-    real, fairly fixed overhead (tens of milliseconds) that has nothing to do
-    with how fast the physics runs. If the ``Play`` widget ticks faster than
-    that, ticks queue up faster than they can be drawn -- which looks like
-    stutter, and can make played-back frames appear to lag or arrive out of
-    order. So ``fps`` here is a *target*: we measure how long the first frame
-    actually takes to render on this machine and never promise more than
-    that, capping the widget's tick rate accordingly.
+    Inside a live Jupyter kernel this switches to the ``ipympl`` backend (see
+    :func:`_ensure_interactive_backend`) and drives its live canvas directly:
+    2D playback is true-blitted (only the particles are redrawn, not the
+    whole figure), and 3D playback redraws in place without ever leaving
+    Python -- both skip the per-frame PNG encode/transfer that caused
+    stutter under the plain inline backend. Outside a live kernel (a script,
+    a test, or without ``ipympl``) playback falls back to that PNG-per-frame
+    approach, unchanged: we measure how long the first frame actually takes
+    to render+encode on this machine and cap the ``Play`` widget's tick rate
+    accordingly, so it never queues frames faster than they can be drawn.
     """
     if color_by not in VALID_COLOR_BY:
         raise ValueError(f"color_by must be one of {VALID_COLOR_BY}")
 
     n_frames = pos.shape[0]
+    L = np.atleast_1d(np.asarray(L, dtype=float))
+    dim = L.size
+    full_3d = dim == 3 and slab is None
+
     color_static, vmin, vmax, color_label = None, 0.0, 1.0, ""
     color_by_render = color_by
     if color_by == "speed":
@@ -206,18 +381,32 @@ def play(pos, vel, times, mass, radius, L, *, display_scale=1.0,
             color_static = mass_amu
 
     mean_v = float(np.sqrt(np.sum(vel[0] ** 2, axis=-1)).mean()) if vel.size else 0.0
-    L = np.atleast_1d(np.asarray(L, dtype=float))
     slab_window = _slab_window(L, slab)
-    fig, ax, coll, quiv, title = _setup_scene(
-        L, radius, display_scale, vectors=vectors, color_by=color_by_render,
-        figsize=figsize, mean_speed=mean_v, color_static=color_static,
-        vmin=vmin, vmax=vmax, color_label=color_label,
-    )
-    _update_artists(coll, quiv, title, pos[0], vel[0], color_by_render,
-                    float(times[0]) if times.size else None, slab_window)
+    live = _ensure_interactive_backend()
 
-    import io
-    import time
+    scene_kwargs = dict(display_scale=display_scale, vectors=vectors,
+                        color_by=color_by_render, figsize=figsize,
+                        mean_speed=mean_v, color_static=color_static,
+                        vmin=vmin, vmax=vmax, color_label=color_label)
+    if full_3d:
+        fig, ax, coll, quiv, title = _setup_scene_3d(L, radius, **scene_kwargs)
+    else:
+        fig, ax, coll, quiv, title = _setup_scene(L, radius, **scene_kwargs)
+
+    quiv_holder = [quiv]
+
+    def update(f):
+        t = float(times[f]) if times.size else None
+        if full_3d:
+            quiv_holder[0] = _update_artists_3d(
+                ax, coll, quiv_holder[0], title, pos[f], vel[f],
+                color_by_render, t, vectors, mean_v, L)
+        else:
+            _update_artists(coll, quiv_holder[0], title, pos[f], vel[f],
+                            color_by_render, t, slab_window)
+
+    update(0)
+
     import matplotlib.pyplot as plt
     try:
         from IPython.display import display
@@ -225,33 +414,66 @@ def play(pos, vel, times, mass, radius, L, *, display_scale=1.0,
         plt.close(fig)
         return None  # nothing to display outside IPython
 
-    # Measure the real redraw+encode cost directly via the Agg pipeline (not
-    # by timing display() itself, which can short-circuit with no cost when
-    # there's no live frontend to publish to -- e.g. outside a real kernel).
-    # matplotlib caches the rendered raster, so the display() call right
-    # after reuses it instead of rendering twice.
-    t0 = time.time()
-    fig.canvas.draw()
-    fig.savefig(io.BytesIO(), format="png")
-    render_time = time.time() - t0
+    if live:
+        # Live canvas: no PNG round trip. 2D blits (fastest); mplot3d has no
+        # draw_artist support, so 3D just redraws in place -- still far
+        # cheaper than re-encoding a PNG every frame, and it's what makes the
+        # scene mouse-rotatable while playing or paused.
+        display(fig.canvas)
+        if full_3d:
+            # draw_idle() only *schedules* a redraw and returns immediately,
+            # so it can't be timed directly -- draw() forces the same work
+            # synchronously, giving a real measurement of the per-frame cost.
+            t0 = time.time()
+            fig.canvas.draw()
+            render_time = time.time() - t0
 
-    handle = display(fig, display_id=True)  # None outside a live kernel
-    # We keep updating `fig` in place via `handle` from here on, so drop it
-    # from pyplot's own figure registry now -- otherwise IPython's inline
-    # backend auto-displays every still-open figure again (as a frozen,
-    # non-interactive duplicate) at the end of the cell.
-    plt.close(fig)
+            def push(f):
+                fig.canvas.draw_idle()
+        else:
+            artists = [a for a in (coll, quiv_holder[0], title) if a is not None]
+            bg = _setup_blit(fig, artists)  # one-time full draw, not timed
+            t0 = time.time()
+            _blit_frame(fig, ax, bg, artists)
+            render_time = time.time() - t0
+
+            def push(f):
+                _blit_frame(fig, ax, bg, [a for a in (coll, quiv_holder[0], title)
+                                          if a is not None])
+    else:
+        # Static (inline / headless) fallback: redraw the whole figure to a
+        # PNG and push it as a fresh display update. Real, fairly fixed cost
+        # (tens of ms) with nothing to do with the physics -- ticking the
+        # `Play` widget faster than this machine can redraw+encode just makes
+        # frames queue up, which looks like stutter or out-of-order playback.
+        import io
+
+        t0 = time.time()
+        fig.canvas.draw()
+        fig.savefig(io.BytesIO(), format="png")
+        render_time = time.time() - t0
+
+        handle = display(fig, display_id=True)  # None outside a live kernel
+        # We keep updating `fig` in place via `handle` from here on, so drop
+        # it from pyplot's own figure registry now -- otherwise IPython's
+        # inline backend auto-displays every still-open figure again (as a
+        # frozen, non-interactive duplicate) at the end of the cell.
+        plt.close(fig)
+
+        def push(f):
+            fig.canvas.draw_idle()
+            if handle is not None:
+                handle.update(fig)
 
     try:
         import ipywidgets as widgets
     except ImportError:
-        _autoplay_fallback(fig, handle, coll, quiv, title, pos, vel, times,
-                           color_by_render, fps, speed, slab_window)
+        _autoplay_fallback(update, push, n_frames, fps, speed)
         return None
 
-    # Never tick faster than this machine can actually redraw+encode a frame
-    # (measured above from the first frame), with a safety margin so a
-    # slightly-more-expensive later frame doesn't immediately fall behind.
+    # Never tick faster than this machine can actually push a frame (measured
+    # above), with a safety margin so a slightly-more-expensive later frame
+    # doesn't immediately fall behind.
     achievable_fps = 0.8 / max(render_time, 1e-3)
     effective_fps = min(fps, achievable_fps) if fps and fps > 0 else achievable_fps
     interval_ms = max(1, round(1000.0 / (effective_fps * max(speed, 1e-9))))
@@ -263,36 +485,23 @@ def play(pos, vel, times, mass, radius, L, *, display_scale=1.0,
 
     def on_change(change):
         f = change["new"]
-        _update_artists(coll, quiv, title, pos[f], vel[f], color_by_render,
-                        float(times[f]) if times.size else None, slab_window)
-        fig.canvas.draw_idle()
-        if handle is not None:
-            handle.update(fig)
+        update(f)
+        push(f)
 
     play_widget.observe(on_change, names="value")
     display(widgets.HBox([play_widget, slider]))
     return play_widget
 
 
-def _autoplay_fallback(fig, handle, coll, quiv, title, pos, vel, times,
-                       color_by, fps, speed, slab_window=None):
-    """Forward-only autoplay used when ipywidgets isn't installed.
-
-    ``fig`` is already closed (dropped from pyplot's figure registry) by the
-    caller; we keep updating it in place via ``handle`` regardless.
-    """
-    import time
-
+def _autoplay_fallback(update, push, n_frames, fps, speed):
+    """Forward-only autoplay used when ipywidgets isn't installed."""
     print("Tip: install ipywidgets for play/pause/scrub controls "
           "(pip install ipywidgets).")
     frame_budget = (1.0 / (fps * max(speed, 1e-9))) if fps else 0.0
-    for f in range(1, pos.shape[0]):
+    for f in range(1, n_frames):
         t0 = time.time()
-        _update_artists(coll, quiv, title, pos[f], vel[f], color_by,
-                        float(times[f]) if times.size else None, slab_window)
-        fig.canvas.draw_idle()
-        if handle is not None:
-            handle.update(fig)
+        update(f)
+        push(f)
         rest = frame_budget - (time.time() - t0)
         if rest > 0:
             time.sleep(rest)

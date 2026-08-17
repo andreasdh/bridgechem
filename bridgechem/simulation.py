@@ -222,11 +222,11 @@ class Simulation:
         media player, including scrubbing back to inspect a collision); falls
         back to a simple forward-only autoplay if ipywidgets isn't installed.
 
-        A 3D run is drawn as its x-y projection. Particles at different depths
-        then overlap on screen, so an apparent "collision" may just be a
-        near-miss in z. Pass ``slab=2.0`` to show only the particles within a
-        2 nm thick slice through the middle of the box, where what you see
-        really is what collides.
+        A 3D run gets a real, mouse-rotatable 3D scene by default -- drag to
+        spin it, even mid-playback. Pass ``slab=2.0`` instead to view a thin
+        2 nm slice through the middle of the box in 2D, where every apparent
+        collision on screen really is one (useful when a full 3D view is too
+        busy to read at a glance).
         """
         ds = display_scale if display_scale is not None else self.display_scale
         return viz.play(self.pos, self.vel, self.times, self.mass, self.radius,
