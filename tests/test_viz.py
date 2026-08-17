@@ -21,7 +21,7 @@ def _trajectory(N=60, size=(20, 20), steps=2000, sample_every=100, seed=0,
     dt = system._auto_dt()
     traj_pos, traj_vel, times, impulse, virial = kernels._simulate(
         system.pos, system.vel, system.radius, system.inv_mass,
-        system.Lx, system.Ly, dt, steps, sample_every, system.periodic,
+        system.L, dt, steps, sample_every, system.periodic,
     )
     return system, traj_pos, traj_vel, times, impulse
 
@@ -33,7 +33,7 @@ def test_in_notebook_false_under_pytest():
 def test_scene_builds_and_updates():
     system = bc.box(N=40, size=(15, 15), seed=0)
     fig, ax, coll, quiv, title = viz._setup_scene(
-        system.Lx, system.Ly, system.radius, system.display_scale,
+        system.L, system.radius, system.display_scale,
         vectors=True, color_by="speed", figsize=(4, 4), mean_speed=300.0,
         vmax=750.0,
     )
@@ -45,8 +45,7 @@ def test_scene_builds_and_updates():
 
 def test_play_returns_widget_with_speed_coloring():
     system, pos, vel, times, _ = _trajectory()
-    pw = viz.play(pos, vel, times, system.mass, system.radius, system.Lx,
-                  system.Ly, vectors=True, color_by="speed", fps=30, speed=1.0)
+    pw = viz.play(pos, vel, times, system.mass, system.radius, system.L, vectors=True, color_by="speed", fps=30, speed=1.0)
     assert isinstance(pw, widgets.Play)
     assert pw.max == pos.shape[0] - 1
 
@@ -56,8 +55,7 @@ def test_play_scrubbing_updates_frame_and_conserves_energy():
     ke = (0.5 * system.mass * np.sum(vel ** 2, axis=-1)).sum(axis=-1)
     assert (ke.max() - ke.min()) / ke.mean() < 1e-9  # sanity: elastic engine
 
-    pw = viz.play(pos, vel, times, system.mass, system.radius, system.Lx,
-                  system.Ly, color_by="speed", fps=30, speed=1.0)
+    pw = viz.play(pos, vel, times, system.mass, system.radius, system.L, color_by="speed", fps=30, speed=1.0)
     last = pos.shape[0] - 1
     pw.value = last  # simulate scrubbing to the final frame
     # after scrubbing, the artist should reflect the last frame's positions
@@ -68,23 +66,20 @@ def test_play_scrubbing_updates_frame_and_conserves_energy():
 def test_play_color_by_mass_mixture():
     system, pos, vel, times, _ = _trajectory(N=40, steps=1000)
     system.set_mass(80.0, indices=slice(0, 20))
-    pw = viz.play(pos, vel, times, system.mass, system.radius, system.Lx,
-                  system.Ly, color_by="mass", fps=30)
+    pw = viz.play(pos, vel, times, system.mass, system.radius, system.L, color_by="mass", fps=30)
     assert isinstance(pw, widgets.Play)
 
 
 def test_play_color_by_mass_uniform_does_not_crash():
     system, pos, vel, times, _ = _trajectory(N=30, steps=500)
-    pw = viz.play(pos, vel, times, system.mass, system.radius, system.Lx,
-                  system.Ly, color_by="mass", fps=30)
+    pw = viz.play(pos, vel, times, system.mass, system.radius, system.L, color_by="mass", fps=30)
     assert isinstance(pw, widgets.Play)
 
 
 def test_play_invalid_color_by_raises():
     system, pos, vel, times, _ = _trajectory(N=20, steps=500)
     with pytest.raises(ValueError):
-        viz.play(pos, vel, times, system.mass, system.radius, system.Lx,
-                 system.Ly, color_by="type")
+        viz.play(pos, vel, times, system.mass, system.radius, system.L, color_by="type")
 
 
 def test_play_does_not_leak_open_figures():
@@ -94,10 +89,8 @@ def test_play_does_not_leak_open_figures():
     # repeated calls (e.g. run() then show()) accumulate open figures.
     n_before = len(plt.get_fignums())
     system, pos, vel, times, _ = _trajectory(N=30, steps=500)
-    viz.play(pos, vel, times, system.mass, system.radius, system.Lx,
-             system.Ly, color_by="speed")
-    viz.play(pos, vel, times, system.mass, system.radius, system.Lx,
-             system.Ly, color_by=None)
+    viz.play(pos, vel, times, system.mass, system.radius, system.L, color_by="speed")
+    viz.play(pos, vel, times, system.mass, system.radius, system.L, color_by=None)
     assert len(plt.get_fignums()) == n_before
 
 
@@ -107,16 +100,14 @@ def test_play_never_exceeds_measured_achievable_fps():
     # than they can be drawn -- which looks like stutter and can make
     # playback appear to skip or jump backward.
     system, pos, vel, times, _ = _trajectory(N=100, steps=2000)
-    pw = viz.play(pos, vel, times, system.mass, system.radius, system.Lx,
-                  system.Ly, color_by="speed", fps=1000)  # deliberately absurd
+    pw = viz.play(pos, vel, times, system.mass, system.radius, system.L, color_by="speed", fps=1000)  # deliberately absurd
     achieved_fps = 1000.0 / pw.interval
     assert achieved_fps < 1000  # must have been capped down, not honored
 
 
 def test_play_zero_fps_does_not_raise():
     system, pos, vel, times, _ = _trajectory(N=20, steps=500)
-    pw = viz.play(pos, vel, times, system.mass, system.radius, system.Lx,
-                  system.Ly, fps=0)
+    pw = viz.play(pos, vel, times, system.mass, system.radius, system.L, fps=0)
     assert pw.interval >= 1
 
 
@@ -129,17 +120,17 @@ def test_run_and_show_end_to_end(monkeypatch):
 
 
 def test_pick_sample_every_monotonic_in_speed():
-    mean_speed, dt, Lx, Ly = 300.0, 1e-13, 40e-9, 40e-9
-    slow = viz.pick_sample_every(mean_speed, dt, Lx, Ly, fps=30, speed=0.3)
-    mid = viz.pick_sample_every(mean_speed, dt, Lx, Ly, fps=30, speed=1.0)
-    fast = viz.pick_sample_every(mean_speed, dt, Lx, Ly, fps=30, speed=3.0)
+    mean_speed, dt, L = 300.0, 1e-13, np.array([40e-9, 40e-9])
+    slow = viz.pick_sample_every(mean_speed, dt, L, fps=30, speed=0.3)
+    mid = viz.pick_sample_every(mean_speed, dt, L, fps=30, speed=1.0)
+    fast = viz.pick_sample_every(mean_speed, dt, L, fps=30, speed=3.0)
     assert slow < mid < fast
 
 
 def test_pick_sample_every_targets_crossing_time():
-    mean_speed, dt, Lx, Ly = 300.0, 1e-13, 40e-9, 40e-9
-    se = viz.pick_sample_every(mean_speed, dt, Lx, Ly, fps=30, speed=1.0)
-    crossing_time = min(Lx, Ly) / mean_speed
+    mean_speed, dt, L = 300.0, 1e-13, np.array([40e-9, 40e-9])
+    se = viz.pick_sample_every(mean_speed, dt, L, fps=30, speed=1.0)
+    crossing_time = float(np.min(L)) / mean_speed
     frames_per_crossing = crossing_time / (se * dt)
     wallclock_per_crossing = frames_per_crossing / 30.0
     assert 4.0 < wallclock_per_crossing < 9.0  # near the 6s target

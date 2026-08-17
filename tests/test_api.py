@@ -40,10 +40,18 @@ def test_run_returns_simulation_with_expected_shapes():
     assert sim.times.shape[0] == sim.n_frames
 
 
-def test_t_alias_for_steps():
+def test_t_is_a_duration_in_picoseconds():
     system = bc.box(N=20, size=(20, 20), seed=0)
-    sim = system.run(t=1000, sample_every=100, animate=False)
-    assert sim.total_time > 0
+    sim = system.run(t=250, sample_every=100, animate=False)
+    assert np.isclose(sim.total_time, 250e-12, rtol=0.02)
+
+
+def test_t_duration_is_independent_of_particle_size():
+    # dt shrinks with the radius, so a fixed `steps` covers less time for
+    # smaller particles -- `t` must not.
+    big = bc.box(N=20, size=(20, 20), radius=0.4, seed=0).run(t=100, animate=False)
+    small = bc.box(N=20, size=(20, 20), radius=0.05, seed=0).run(t=100, animate=False)
+    assert np.isclose(big.total_time, small.total_time, rtol=0.05)
 
 
 def test_calculate_dispatch():

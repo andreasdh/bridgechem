@@ -31,6 +31,31 @@ def _nm(x):
     return np.asarray(x) * 1e9
 
 
+def _project(pos, slab_window=None):
+    """Screen coordinates: the x-y components, in nm.
+
+    A 3D box is drawn as its x-y projection. If ``slab_window`` is given as
+    ``(z_low, z_high)`` in metres, particles outside that slice are moved to
+    NaN, which matplotlib simply does not draw -- so what remains on screen is
+    a thin sheet of gas whose apparent collisions are real ones.
+    """
+    xy = _nm(pos[:, :2])
+    if slab_window is not None and pos.shape[1] > 2:
+        outside = (pos[:, 2] < slab_window[0]) | (pos[:, 2] > slab_window[1])
+        xy = xy.copy()
+        xy[outside] = np.nan
+    return xy
+
+
+def _slab_window(L, slab):
+    """A slab of thickness ``slab`` nm through the middle of the box (metres)."""
+    if slab is None or len(L) < 3:
+        return None
+    half = 0.5 * slab * 1e-9
+    middle = 0.5 * float(L[2])
+    return (middle - half, middle + half)
+
+
 # A mean-speed particle crossing the box takes this many wall-clock seconds
 # at speed=1 -- slow enough to actually watch collisions happen, not so slow
 # it gets boring. Tune with the `speed` argument on Box.run()/Simulation.show().
@@ -38,7 +63,7 @@ SECONDS_PER_CROSSING = 6.0
 MAX_FRAMES = 3000  # safety cap on stored/played frames for very long/fast runs
 
 
-def pick_sample_every(mean_speed, dt, Lx, Ly, *, fps=15, speed=1.0,
+def pick_sample_every(mean_speed, dt, L, *, fps=15, speed=1.0,
                       seconds_per_crossing=SECONDS_PER_CROSSING):
     """Choose how many physics steps to group into one displayed frame.
 
@@ -51,7 +76,7 @@ def pick_sample_every(mean_speed, dt, Lx, Ly, *, fps=15, speed=1.0,
     """
     if mean_speed <= 0 or dt <= 0 or fps <= 0:
         return 50
-    crossing_time = min(Lx, Ly) / mean_speed  # simulated seconds to cross the box
+    crossing_time = float(np.min(L)) / mean_speed  # simulated s to cross the box
     wallclock_per_crossing = seconds_per_crossing / max(speed, 1e-9)
     sim_seconds_per_frame = crossing_time / (wallclock_per_crossing * fps)
     return max(1, round(sim_seconds_per_frame / dt))
@@ -72,13 +97,13 @@ def in_notebook() -> bool:
 # --------------------------------------------------------------------------- #
 # scene construction / per-frame updates
 # --------------------------------------------------------------------------- #
-def _setup_scene(Lx, Ly, radius, display_scale, *, vectors, color_by,
+def _setup_scene(L, radius, display_scale, *, vectors, color_by,
                  figsize, mean_speed, color_static=None, vmin=0.0, vmax=1.0,
                  color_label=""):
     import matplotlib.pyplot as plt
     from matplotlib.collections import EllipseCollection
 
-    Lx_nm, Ly_nm = Lx * 1e9, Ly * 1e9
+    Lx_nm, Ly_nm = float(L[0]) * 1e9, float(L[1]) * 1e9
     fig, ax = plt.subplots(figsize=figsize)
     ax.set_xlim(0, Lx_nm)
     ax.set_ylim(0, Ly_nm)
@@ -121,13 +146,15 @@ def _setup_scene(Lx, Ly, radius, display_scale, *, vectors, color_by,
     return fig, ax, coll, quiv, title
 
 
-def _update_artists(coll, quiv, title, pos, vel, color_by, time_s):
-    coll.set_offsets(_nm(pos))
+def _update_artists(coll, quiv, title, pos, vel, color_by, time_s,
+                    slab_window=None):
+    xy = _project(pos, slab_window)
+    coll.set_offsets(xy)
     if color_by == "speed":
         coll.set_array(np.sqrt(np.sum(vel ** 2, axis=-1)))
     # color_by == "mass" is static (set once at scene setup); nothing to do.
     if quiv is not None:
-        quiv.set_offsets(_nm(pos))
+        quiv.set_offsets(xy)
         quiv.set_UVC(vel[:, 0], vel[:, 1])
     if time_s is not None:
         title.set_text(f"t = {time_s * 1e12:.2f} ps")
@@ -136,11 +163,15 @@ def _update_artists(coll, quiv, title, pos, vel, color_by, time_s):
 # --------------------------------------------------------------------------- #
 # interactive playback (play / pause / scrub)
 # --------------------------------------------------------------------------- #
-def play(pos, vel, times, mass, radius, Lx, Ly, *, display_scale=1.0,
-         vectors=False, color_by="speed", fps=15, speed=1.0, figsize=(6, 6)):
+def play(pos, vel, times, mass, radius, L, *, display_scale=1.0,
+         vectors=False, color_by="speed", fps=15, speed=1.0, figsize=(6, 6),
+         slab=None):
     """Play back a trajectory with play/pause/scrub controls (no HTML file).
 
-    ``pos``/``vel`` are ``(n_frames, N, 2)`` arrays, ``times`` is ``(n_frames,)``.
+    ``pos``/``vel`` are ``(n_frames, N, dim)`` arrays and ``L`` is ``(dim,)``.
+    A 3D run is drawn as its x-y projection; ``slab`` (nm) restricts the view
+    to a thin slice through the middle of the box so that what you see
+    colliding really is colliding.
     Uses ``ipywidgets.Play`` when available; falls back to a simple
     forward-only autoplay (no pause) if it isn't installed. Returns the
     ``ipywidgets.Play`` widget (for tests / further wiring), or ``None`` if
@@ -175,13 +206,15 @@ def play(pos, vel, times, mass, radius, Lx, Ly, *, display_scale=1.0,
             color_static = mass_amu
 
     mean_v = float(np.sqrt(np.sum(vel[0] ** 2, axis=-1)).mean()) if vel.size else 0.0
+    L = np.atleast_1d(np.asarray(L, dtype=float))
+    slab_window = _slab_window(L, slab)
     fig, ax, coll, quiv, title = _setup_scene(
-        Lx, Ly, radius, display_scale, vectors=vectors, color_by=color_by_render,
+        L, radius, display_scale, vectors=vectors, color_by=color_by_render,
         figsize=figsize, mean_speed=mean_v, color_static=color_static,
         vmin=vmin, vmax=vmax, color_label=color_label,
     )
     _update_artists(coll, quiv, title, pos[0], vel[0], color_by_render,
-                    float(times[0]) if times.size else None)
+                    float(times[0]) if times.size else None, slab_window)
 
     import io
     import time
@@ -213,7 +246,7 @@ def play(pos, vel, times, mass, radius, Lx, Ly, *, display_scale=1.0,
         import ipywidgets as widgets
     except ImportError:
         _autoplay_fallback(fig, handle, coll, quiv, title, pos, vel, times,
-                           color_by_render, fps, speed)
+                           color_by_render, fps, speed, slab_window)
         return None
 
     # Never tick faster than this machine can actually redraw+encode a frame
@@ -231,7 +264,7 @@ def play(pos, vel, times, mass, radius, Lx, Ly, *, display_scale=1.0,
     def on_change(change):
         f = change["new"]
         _update_artists(coll, quiv, title, pos[f], vel[f], color_by_render,
-                        float(times[f]) if times.size else None)
+                        float(times[f]) if times.size else None, slab_window)
         fig.canvas.draw_idle()
         if handle is not None:
             handle.update(fig)
@@ -242,7 +275,7 @@ def play(pos, vel, times, mass, radius, Lx, Ly, *, display_scale=1.0,
 
 
 def _autoplay_fallback(fig, handle, coll, quiv, title, pos, vel, times,
-                       color_by, fps, speed):
+                       color_by, fps, speed, slab_window=None):
     """Forward-only autoplay used when ipywidgets isn't installed.
 
     ``fig`` is already closed (dropped from pyplot's figure registry) by the
@@ -256,7 +289,7 @@ def _autoplay_fallback(fig, handle, coll, quiv, title, pos, vel, times,
     for f in range(1, pos.shape[0]):
         t0 = time.time()
         _update_artists(coll, quiv, title, pos[f], vel[f], color_by,
-                        float(times[f]) if times.size else None)
+                        float(times[f]) if times.size else None, slab_window)
         fig.canvas.draw_idle()
         if handle is not None:
             handle.update(fig)
