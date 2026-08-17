@@ -26,6 +26,18 @@ plane rather than a rotatable overview.
 If ``ipywidgets`` isn't installed, playback falls back to a simple
 forward-only autoplay (no pause/scrub). If there is no live notebook kernel at
 all, nothing is displayed but the trajectory is still returned normally.
+
+**Particle size.** Particles are drawn at their true collision radius by
+default -- except when that would be a bad picture: a `packing`-derived
+radius spread over very few particles can demand a size approaching a third
+of the box (especially in 3D), and a physically real radius (a gas's actual
+van der Waals radius, a couple of angstrom) is too small to see at all in a
+box sized for visibility. :func:`_auto_size_factor` keeps the drawn size
+within a sane range for both ends without touching the *relative* spacing
+between particles, so a dense (liquid-like) arrangement still reads as
+denser than a sparse (gas-like) one -- only the common scale changes.
+``display_scale`` still multiplies on top of this, uncapped, so you can push
+the result bigger or smaller yourself.
 """
 
 from __future__ import annotations
@@ -74,6 +86,42 @@ def _slab_window(L, slab):
 # it gets boring. Tune with the `speed` argument on Box.run()/Simulation.show().
 SECONDS_PER_CROSSING = 6.0
 MAX_FRAMES = 3000  # safety cap on stored/played frames for very long/fast runs
+
+# Bounds on how big a particle's *drawn* diameter is allowed to be, as a
+# fraction of the box's shortest side -- see _auto_size_factor().
+MIN_DISPLAY_DIAM_FRAC = 0.015
+MAX_DISPLAY_DIAM_FRAC_2D = 0.12
+MAX_DISPLAY_DIAM_FRAC_3D = 0.08  # 3D reads busier at the same relative size
+
+
+def _auto_size_factor(radius, L, max_frac, min_frac=MIN_DISPLAY_DIAM_FRAC):
+    """Multiplier that keeps the drawn diameter within a sane visible range.
+
+    Particles are drawn at their true collision size by default (factor 1) --
+    *unless* that would be imperceptibly small or absurdly large relative to
+    the box, in which case the drawn size is scaled toward a floor or
+    ceiling instead. Both ends are real cases here: ``radius`` defaults to a
+    `packing` fraction of the box (see :class:`bridgechem.Box`), which for a
+    handful of particles in a big 3D box can demand a radius approaching a
+    third of the box width -- and a *physically real* particle radius (a
+    gas's actual van der Waals radius, a couple of angstrom) is genuinely too
+    small to see at all in a box sized for visibility.
+
+    The factor is uniform across every particle in the run (there's only one
+    ``radius`` to begin with -- bridgechem doesn't support per-particle
+    radii), so it never distorts *relative* crowding: a denser arrangement
+    still reads as denser than a sparser one, only the common scale changes.
+    This runs before the user's own ``display_scale``, which still applies
+    on top uncapped -- an explicit request to draw things bigger or smaller
+    is never second-guessed.
+    """
+    r = float(np.max(radius))
+    shortest = float(np.min(L))
+    if r <= 0 or shortest <= 0:
+        return 1.0
+    natural_frac = 2.0 * r / shortest
+    target_frac = min(max(natural_frac, min_frac), max_frac)
+    return target_frac / natural_frac
 
 
 def pick_sample_every(mean_speed, dt, L, *, fps=15, speed=1.0,
@@ -180,7 +228,8 @@ def _setup_scene(L, radius, display_scale, *, vectors, color_by,
     for spine in ax.spines.values():
         spine.set_linewidth(1.5)
 
-    diameters = 2.0 * np.asarray(radius) * 1e9 * display_scale  # nm
+    auto = _auto_size_factor(radius, L, MAX_DISPLAY_DIAM_FRAC_2D)
+    diameters = 2.0 * np.asarray(radius) * 1e9 * display_scale * auto  # nm
     coll = EllipseCollection(
         diameters, diameters, np.zeros_like(diameters), units="xy",
         offsets=np.zeros((len(diameters), 2)), offset_transform=ax.transData,
@@ -252,7 +301,8 @@ def _setup_scene_3d(L, radius, display_scale, *, vectors, color_by,
     # rotate. This picks a size that looks right at the initial view (a
     # known mplot3d limitation, not a bug).
     points_per_nm = (figsize[0] * 72.0) / max(Lx_nm, Ly_nm, Lz_nm)
-    diam_nm = 2.0 * np.asarray(radius) * 1e9 * display_scale
+    auto = _auto_size_factor(radius, L, MAX_DISPLAY_DIAM_FRAC_3D)
+    diam_nm = 2.0 * np.asarray(radius) * 1e9 * display_scale * auto
     sizes = (diam_nm * points_per_nm) ** 2
 
     n = len(radius)

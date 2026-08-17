@@ -89,6 +89,57 @@ def test_ensure_interactive_backend_never_switches_outside_a_notebook():
     assert matplotlib.get_backend() == before
 
 
+def test_auto_size_factor_is_a_noop_for_already_reasonable_sizes():
+    # A typical 2D demo (N=200 in a 60 nm box, default packing) already looks
+    # right today -- this must not perturb it.
+    system = bc.box(N=200, size=(60, 60), packing=0.10, seed=0)
+    factor = viz._auto_size_factor(system.radius, system.L,
+                                   viz.MAX_DISPLAY_DIAM_FRAC_2D)
+    assert 0.9 < factor <= 1.0
+
+
+def test_auto_size_factor_shrinks_the_reported_oversized_case():
+    # The exact bug report: N=9 in a 120 nm cube, default packing=0.10 --
+    # the raw radius alone demands a diameter ~28% of the box width.
+    system = bc.box(N=9, size=(120, 120, 120), packing=0.10, seed=0)
+    natural_frac = 2.0 * system.radius[0] / np.min(system.L)
+    assert natural_frac > viz.MAX_DISPLAY_DIAM_FRAC_3D  # confirms the bug exists
+
+    factor = viz._auto_size_factor(system.radius, system.L,
+                                   viz.MAX_DISPLAY_DIAM_FRAC_3D)
+    drawn_frac = natural_frac * factor
+    assert np.isclose(drawn_frac, viz.MAX_DISPLAY_DIAM_FRAC_3D)
+
+
+def test_auto_size_factor_grows_a_real_van_der_waals_scale_radius():
+    # A real gas's actual radius (angstrom-scale) in a box sized for
+    # visibility (tens of nm) would otherwise be invisible.
+    argon_radius_m = bc.constants.gas_properties("argon")["radius_m"]
+    L = np.array([120e-9, 120e-9, 120e-9])
+    natural_frac = 2.0 * argon_radius_m / np.min(L)
+    assert natural_frac < viz.MIN_DISPLAY_DIAM_FRAC  # confirms it'd be invisible
+
+    factor = viz._auto_size_factor(np.array([argon_radius_m]), L,
+                                   viz.MAX_DISPLAY_DIAM_FRAC_3D)
+    drawn_frac = natural_frac * factor
+    assert np.isclose(drawn_frac, viz.MIN_DISPLAY_DIAM_FRAC)
+
+
+def test_scene_3d_caps_particle_size_for_the_reported_bug_case():
+    # End-to-end: the actual scene builder must not draw absurdly large
+    # spheres for N=9 in a big 3D box.
+    system = bc.box(N=9, size=(120, 120, 120), packing=0.10, seed=0)
+    fig, ax, coll, quiv, title = viz._setup_scene_3d(
+        system.L, system.radius, system.display_scale,
+        vectors=False, color_by=None, figsize=(6, 6), mean_speed=300.0,
+    )
+    diam_points = np.sqrt(coll.get_sizes()[0])
+    points_per_nm = (6 * 72.0) / 120.0  # figsize[0]*72 / max(Lx,Ly,Lz) in nm
+    diam_nm = diam_points / points_per_nm
+    assert diam_nm / 120.0 <= viz.MAX_DISPLAY_DIAM_FRAC_3D + 1e-9
+    matplotlib.pyplot.close(fig)
+
+
 def test_play_returns_widget_with_speed_coloring():
     system, pos, vel, times, _ = _trajectory()
     pw = viz.play(pos, vel, times, system.mass, system.radius, system.L, vectors=True, color_by="speed", fps=30, speed=1.0)

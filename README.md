@@ -82,6 +82,16 @@ coordinate that would have kept them apart). Pass `slab=2.0` to
 box in 2D, when a full 3D view is too busy to read at a glance and you'd
 rather see a single plane where every collision on screen really is one.
 
+Particles are drawn at their true collision radius by default -- except when
+that would be a bad picture. A `packing`-driven radius spread over very few
+particles can demand a size approaching a third of the box (especially in
+3D); a real, physically accurate radius (a gas's actual van der Waals
+radius, a couple of angstrom) is too small to see at all. Drawn size is
+auto-balanced into a sane range for both ends without touching *relative*
+spacing between particles -- a dense, liquid-like arrangement still reads as
+denser than a sparse, gas-like one, only the common scale changes. Pass
+`display_scale` to push the result bigger or smaller yourself.
+
 Outside a live kernel (a script, a test, or without `ipympl` installed)
 playback falls back to the old PNG-per-frame approach, which still works
 everywhere -- just without blitting or rotation.

@@ -89,16 +89,18 @@ class Box:
     mass : float, optional
         Particle mass in **amu**, overrides the gas default.
     radius : float, optional
-        Hard-sphere radius in **nanometres**. If omitted the radius is chosen
-        automatically from ``packing`` so the particles are big and easy to see
-        (this is what you collide with *and* what is drawn). For a physically
-        dilute, near-ideal gas, pass a small explicit radius and turn up
-        ``display_scale`` so you can still see them.
+        Hard-sphere radius in **nanometres** -- this is what actually
+        collides, and drives excluded-volume effects on the pressure. If
+        omitted, chosen automatically from ``packing``. Either way, what's
+        *drawn* on screen is auto-balanced separately (see ``display_scale``)
+        so a real, physically tiny radius (a gas's actual van der Waals
+        radius, a couple of angstrom) still shows up, and a packing-driven
+        radius spread over very few particles doesn't blow up to fill the box.
     packing : float
         Target fraction of the box filled by particles, used to pick the
-        default radius (ignored if ``radius`` is given). ~0.10 gives a lively,
-        clearly visible gas -- but note that at that filling the gas is *not*
-        ideal: excluded volume pushes the pressure well above N k_B T / V.
+        default radius (ignored if ``radius`` is given). ~0.10 gives a lively
+        gas -- but note that at that filling the gas is *not* ideal: excluded
+        volume pushes the pressure well above N k_B T / V.
     temperature : float
         Initial temperature in K (used to sample velocities).
     boundary : {"reflective", "periodic"}
@@ -108,8 +110,12 @@ class Box:
         "uniform_speed" gives every particle the same speed (random direction)
         -- handy for watching a distribution relax to Maxwell-Boltzmann.
     display_scale : float
-        Visual size multiplier for drawing particles (1.0 = draw at true
-        collision size).
+        Extra visual size multiplier for drawing particles, on top of the
+        automatic balancing described under ``radius`` (1.0 = no extra
+        adjustment). The auto-balancing keeps *relative* spacing intact --
+        a denser arrangement still looks denser -- so this is for pushing the
+        common scale bigger or smaller yourself, not for fixing a gas that
+        looks too sparse or too crowded (that's what the balancing is for).
     seed : int, optional
         Seed for reproducible initial positions and velocities.
     """
