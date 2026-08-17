@@ -159,7 +159,7 @@ def test_cooling_lj_gas_increases_binding():
                                   boundary="periodic", seed=0)
     system.add_interactions("LJ")
     pe_hot = np.mean(bc.kernels._lj_forces(
-        system.pos, system.Lx, system.Ly, system.periodic,
+        system.pos, system.L, system.periodic,
         system._interaction["epsilon"], system._interaction["sigma"] ** 2,
         system._interaction["r_cut2"], system._interaction["u_shift"],
         np.zeros((system.N, 2)),

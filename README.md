@@ -8,6 +8,12 @@ a box with `N` particles and watch them evolve in a Jupyter notebook, then pull
 out speed distributions, temperature and pressure and compare them with the
 theory students meet in physical chemistry.
 
+Boxes can be **2D or 3D**. The number of side lengths you give decides which:
+two numbers give a flat box, three give a cube. Everything downstream follows
+from that -- equipartition uses `dim/2 k_B T` per particle, the speed
+distribution uses the 2D (Rayleigh) or 3D Maxwell-Boltzmann form, and the
+pressure comes out in N/m or Pa.
+
 The goal is **didactic**, not to be a production MD package — but the simple
 systems it produces (velocity distributions, pressures, …) do agree with the
 theory for simple real systems.
