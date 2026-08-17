@@ -1,10 +1,13 @@
 """Numba-accelerated hard-sphere and Lennard-Jones kernels.
 
 The hot loops (collision detection, boundary handling, time stepping) live here
-as plain functions operating on raw NumPy arrays. They are JIT-compiled with
-numba when it is available. If numba is not installed the ``njit`` decorator
-degrades to a no-op so the package still runs (much more slowly) in pure Python
--- handy for small examples and for environments where numba is unavailable.
+as plain functions operating on raw NumPy arrays. numba is a required
+dependency, so every one of them is JIT-compiled -- ``_simulate``/
+``_simulate_lj`` themselves are ``@njit``, so an entire trajectory runs inside
+one compiled function with no per-step Python overhead. If numba somehow isn't
+importable at runtime (e.g. an unsupported platform), the ``njit`` decorator
+degrades to a no-op so the package still runs, just much more slowly, in pure
+Python -- a safety net, not the intended path.
 
 Everything is written for a general number of dimensions: the physics is
 expressed once, as a loop ``for d in range(dim)`` over the components of each

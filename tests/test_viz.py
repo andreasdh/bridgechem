@@ -26,6 +26,12 @@ def _trajectory(N=60, size=(20, 20), steps=2000, sample_every=100, seed=0,
     return system, traj_pos, traj_vel, times, impulse
 
 
+def _trajectory_3d(N=40, size=(15, 15, 15), steps=1000, sample_every=100,
+                   seed=0, **box_kwargs):
+    return _trajectory(N=N, size=size, steps=steps, sample_every=sample_every,
+                       seed=seed, **box_kwargs)
+
+
 def test_in_notebook_false_under_pytest():
     assert viz.in_notebook() is False
 
@@ -41,6 +47,46 @@ def test_scene_builds_and_updates():
     fig.canvas.draw()
     assert coll.get_offsets().shape == (40, 2)
     matplotlib.pyplot.close(fig)
+
+
+def test_scene_builds_and_updates_3d():
+    system = bc.box(N=30, size=(15, 15, 15), seed=0)
+    fig, ax, coll, quiv, title = viz._setup_scene_3d(
+        system.L, system.radius, system.display_scale,
+        vectors=True, color_by="speed", figsize=(4, 4), mean_speed=300.0,
+        vmax=750.0,
+    )
+    assert ax.name == "3d"  # a real Axes3D, not a 2D projection
+    assert quiv is None  # 3D quivers are created on first update, not at setup
+    new_quiv = viz._update_artists_3d(
+        ax, coll, quiv, title, system.pos, system.vel, "speed", 1e-12,
+        True, 300.0, system.L,
+    )
+    fig.canvas.draw()
+    x, y, z = coll._offsets3d
+    assert len(x) == len(y) == len(z) == 30
+    assert np.allclose(x, system.pos[:, 0] * 1e9)
+    assert new_quiv is not None
+    matplotlib.pyplot.close(fig)
+
+
+def test_is_live_backend_detects_known_live_backends(monkeypatch):
+    import matplotlib as mpl
+    for name in ("module://ipympl.backend_nbagg", "nbAgg", "WebAgg"):
+        monkeypatch.setattr(mpl, "get_backend", lambda name=name: name)
+        assert viz._is_live_backend() is True
+    for name in ("agg", "module://matplotlib_inline.backend_inline"):
+        monkeypatch.setattr(mpl, "get_backend", lambda name=name: name)
+        assert viz._is_live_backend() is False
+
+
+def test_ensure_interactive_backend_never_switches_outside_a_notebook():
+    # Under pytest in_notebook() is always False, so this must never try to
+    # touch the global matplotlib backend (which would leak into every other
+    # test in the process).
+    before = matplotlib.get_backend()
+    assert viz._ensure_interactive_backend() is False
+    assert matplotlib.get_backend() == before
 
 
 def test_play_returns_widget_with_speed_coloring():
@@ -80,6 +126,30 @@ def test_play_invalid_color_by_raises():
     system, pos, vel, times, _ = _trajectory(N=20, steps=500)
     with pytest.raises(ValueError):
         viz.play(pos, vel, times, system.mass, system.radius, system.L, color_by="type")
+
+
+def test_play_3d_uses_rotatable_scene_and_does_not_crash():
+    system, pos, vel, times, _ = _trajectory_3d()
+    pw = viz.play(pos, vel, times, system.mass, system.radius, system.L,
+                  color_by="speed", fps=30)
+    assert isinstance(pw, widgets.Play)
+    assert pw.max == pos.shape[0] - 1
+
+
+def test_play_3d_with_vectors_does_not_crash():
+    # 3D vectors are the expensive path (the quiver is rebuilt every frame),
+    # so this is the one most likely to break -- exercise it explicitly.
+    system, pos, vel, times, _ = _trajectory_3d(N=20, steps=500)
+    pw = viz.play(pos, vel, times, system.mass, system.radius, system.L,
+                  vectors=True, color_by="mass", fps=30)
+    assert isinstance(pw, widgets.Play)
+
+
+def test_play_3d_with_slab_falls_back_to_2d_projection():
+    system, pos, vel, times, _ = _trajectory_3d()
+    pw = viz.play(pos, vel, times, system.mass, system.radius, system.L,
+                  color_by="speed", fps=30, slab=2.0)
+    assert isinstance(pw, widgets.Play)
 
 
 def test_play_does_not_leak_open_figures():
