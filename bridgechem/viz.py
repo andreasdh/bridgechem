@@ -384,23 +384,40 @@ def _make_live_push(fig):
       here, and diagnosing it further would mean debugging ipympl's JS/comm
       diff protocol blind, without a real browser to inspect.
 
-    A full ``draw()`` sidesteps all of that: nothing is marked animated, so
-    there's no "which artists does the normal draw skip" bookkeeping to get
-    wrong, and it renders and pushes directly like ``blit()`` does (they
-    share the same push mechanism downstream -- ``_png_is_old = True`` then
-    ``manager.refresh_all()`` -- so this isn't a slower path, just a
-    correct one). mplot3d doesn't support ``draw_artist`` at all, so this
-    was already the only option for 3D; using it for 2D too keeps both
-    paths identical and equally trustworthy.
+    A full ``draw()`` sidesteps the *rendering* half of both problems above:
+    nothing is marked animated, so there's no "which artists does the normal
+    draw skip" bookkeeping to get wrong, and it renders and pushes directly
+    like ``blit()`` does. But switching from blit() to draw() alone turned
+    out not to be enough -- particles kept visibly trailing regardless,
+    which makes sense in hindsight: draw() and blit() share the exact same
+    push mechanism *downstream* of rendering (``_png_is_old = True`` then
+    ``manager.refresh_all()``), so whatever caused the trailing was never in
+    which one triggered it. ``refresh_all()`` sends a *diff* against the
+    previous frame by default (``get_diff_image()``), computed and applied
+    asynchronously over the kernel comm -- if a frontend hasn't finished
+    applying frame N-1's diff before frame N's arrives (very possible once
+    ticks start arriving every few tens of ms), frame N's diff, computed
+    against a buffer state the frontend hasn't reached yet, can land wrong
+    without ever raising an error -- a mismatched diff overlaying stale
+    content looks exactly like a trail. A full frame doesn't have this
+    failure mode: whichever one a client processes last simply replaces the
+    canvas outright, no matter what order they arrive in. Forcing
+    ``_force_full`` before every push trades a little bandwidth (a full
+    frame instead of a diff -- trivial at this figure size) to remove that
+    failure mode entirely, rather than relying on frames arriving in order.
+    mplot3d doesn't support ``draw_artist``/blitting at all, so a full
+    ``draw()`` was already the only option for 3D; using it for 2D too keeps
+    both paths identical and equally trustworthy.
     """
-    t0 = time.time()
-    fig.canvas.draw()
-    render_time = time.time() - t0
-
-    def push():
+    def _draw():
+        fig.canvas._force_full = True
         fig.canvas.draw()
 
-    return push, render_time
+    t0 = time.time()
+    _draw()
+    render_time = time.time() - t0
+
+    return _draw, render_time
 
 
 # --------------------------------------------------------------------------- #
