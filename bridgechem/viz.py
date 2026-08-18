@@ -7,21 +7,22 @@ played back with play/pause/scrub controls via ``ipywidgets.Play``.
 ``ipympl`` (``%matplotlib widget``) backend the first time it's called (unless
 you've already picked a backend yourself) and drives a *live* canvas instead
 of the default ``%matplotlib inline`` behaviour of re-rendering the whole
-figure to a PNG and shipping a fresh image every frame. In 2D this means true
-blitting -- only the particles (not the axes, labels, colorbar) are redrawn
-each frame -- which is what actually fixes choppy playback: the PNG round
-trip, not the physics, was the bottleneck. Outside a live kernel (a script, a
-test, or if ``ipympl`` isn't installed) playback falls back to the old
-PNG-per-frame approach, which still works everywhere.
+figure to a PNG and shipping a fresh image every frame. Each tick does a
+direct, synchronous ``fig.canvas.draw()`` -- see :func:`_make_live_push` for
+why that's the reliable choice over both ``draw_idle()`` and manual
+blitting, which were each tried first and each misbehaved specifically on
+ipympl. Outside a live kernel (a script, a test, or if ``ipympl`` isn't
+installed) playback falls back to the old PNG-per-frame approach, which
+still works everywhere.
 
 **2D vs 3D.** The box's dimension (``len(size)`` at construction) decides the
-scene: a 2D box gets the flat, blitted view above. A 3D box gets a real,
-mouse-rotatable ``Axes3D`` scatter -- an actual 3D scene, not a 2D projection
-that drops the z-coordinate (a full-3D box no longer hides particles behind
-each other the way a projection would; nothing is being flattened, only drawn
-in perspective). Pass ``slab=<nm>`` to force the old thin-slice 2D view of a
-3D run instead, when you specifically want to see collisions in a single
-plane rather than a rotatable overview.
+scene: a 2D box gets a flat view, a 3D box gets a real, mouse-rotatable
+``Axes3D`` scatter -- an actual 3D scene, not a 2D projection that drops the
+z-coordinate (a full-3D box no longer hides particles behind each other the
+way a projection would; nothing is being flattened, only drawn in
+perspective). Pass ``slab=<nm>`` to force the old thin-slice 2D view of a 3D
+run instead, when you specifically want to see collisions in a single plane
+rather than a rotatable overview.
 
 If ``ipywidgets`` isn't installed, playback falls back to a simple
 forward-only autoplay (no pause/scrub). If there is no live notebook kernel at
@@ -358,26 +359,48 @@ def _update_artists_3d(ax, coll, quiv, title, pos, vel, color_by, time_s,
 
 
 # --------------------------------------------------------------------------- #
-# blitting (live 2D backend only -- mplot3d does not support draw_artist)
+# live-canvas push (2D and 3D alike): a direct, synchronous full redraw
 # --------------------------------------------------------------------------- #
-def _setup_blit(fig, artists):
-    """Mark artists animated and capture the static background once.
+def _make_live_push(fig):
+    """Set up the live-canvas push mechanism. Returns ``(push, first_render_time)``.
 
-    Order matters: artists must be marked animated *before* this draw, or
-    they'd be baked into the background snapshot and every later blit would
-    show a ghost of frame 0 underneath the live particles.
+    Deliberately a plain, full ``fig.canvas.draw()`` every frame, not
+    ``draw_idle()`` and not manual blitting (``restore_region``/
+    ``draw_artist``/``blit``) -- both were tried and both misbehaved on the
+    ipympl backend specifically:
+
+    - ``draw_idle()`` doesn't render anything itself; it only sends a
+      "please redraw" request to the *frontend* and waits for it to ask
+      back (see ``FigureCanvasWebAggCore.draw_idle``/``send_event``). That
+      round trip can stall under a fast run of ticks -- playback silently
+      freezes while the driving widget's own counter keeps advancing.
+    - Manual blitting marks the particle artists ``animated=True`` so the
+      normal draw traversal skips them, then paints just those artists back
+      in via ``draw_artist`` each frame. That part works fine on the Python
+      side (the rendered buffer itself never accumulates anything stale --
+      confirmed by inspecting it directly), but playback on ipympl still
+      visibly filled up with every past frame's particles, growing steadily
+      slower as it went. However that happens exactly, it isn't reliable
+      here, and diagnosing it further would mean debugging ipympl's JS/comm
+      diff protocol blind, without a real browser to inspect.
+
+    A full ``draw()`` sidesteps all of that: nothing is marked animated, so
+    there's no "which artists does the normal draw skip" bookkeeping to get
+    wrong, and it renders and pushes directly like ``blit()`` does (they
+    share the same push mechanism downstream -- ``_png_is_old = True`` then
+    ``manager.refresh_all()`` -- so this isn't a slower path, just a
+    correct one). mplot3d doesn't support ``draw_artist`` at all, so this
+    was already the only option for 3D; using it for 2D too keeps both
+    paths identical and equally trustworthy.
     """
-    for a in artists:
-        a.set_animated(True)
+    t0 = time.time()
     fig.canvas.draw()
-    return fig.canvas.copy_from_bbox(fig.bbox)
+    render_time = time.time() - t0
 
+    def push():
+        fig.canvas.draw()
 
-def _blit_frame(fig, ax, bg, artists):
-    fig.canvas.restore_region(bg)
-    for a in artists:
-        ax.draw_artist(a)
-    fig.canvas.blit(fig.bbox)
+    return push, render_time
 
 
 # --------------------------------------------------------------------------- #
@@ -399,14 +422,13 @@ def play(pos, vel, times, mass, radius, L, *, display_scale=1.0,
     nothing could be displayed (e.g. outside a notebook).
 
     Inside a live Jupyter kernel this switches to the ``ipympl`` backend (see
-    :func:`_ensure_interactive_backend`) and drives its live canvas directly:
-    2D playback is true-blitted (only the particles are redrawn, not the
-    whole figure), and 3D playback redraws in place without ever leaving
-    Python -- both skip the per-frame PNG encode/transfer that caused
-    stutter under the plain inline backend. Outside a live kernel (a script,
-    a test, or without ``ipympl``) playback falls back to that PNG-per-frame
-    approach, unchanged: we measure how long the first frame actually takes
-    to render+encode on this machine and cap the ``Play`` widget's tick rate
+    :func:`_ensure_interactive_backend`) and drives its live canvas directly
+    with a synchronous redraw each frame (see :func:`_make_live_push`) --
+    skipping the per-frame PNG encode/transfer that caused stutter under the
+    plain inline backend. Outside a live kernel (a script, a test, or
+    without ``ipympl``) playback falls back to that PNG-per-frame approach,
+    unchanged: we measure how long the first frame actually takes to
+    render+encode on this machine and cap the ``Play`` widget's tick rate
     accordingly, so it never queues frames faster than they can be drawn.
     """
     if color_by not in VALID_COLOR_BY:
@@ -467,43 +489,14 @@ def play(pos, vel, times, mass, radius, L, *, display_scale=1.0,
         return None  # nothing to display outside IPython
 
     if live:
-        # Live canvas: no PNG round trip. 2D blits (fastest); mplot3d has no
-        # draw_artist support, so 3D just redraws in place -- still far
-        # cheaper than re-encoding a PNG every frame, and it's what makes the
-        # scene mouse-rotatable while playing or paused. Frame 0 must be
-        # rendered *before* display(fig.canvas): the widget mounts showing
+        # Live canvas: no PNG round trip -- see _make_live_push. Frame 0 must
+        # be rendered *before* display(fig.canvas): the widget mounts showing
         # whatever's already in the canvas buffer, so displaying it first
         # means it mounts blank and only catches up on the next tick.
-        if full_3d:
-            # A synchronous draw() each frame, not draw_idle(). ipympl's
-            # draw_idle() doesn't render anything itself -- it only sends a
-            # "please redraw" request to the *frontend* and waits for it to
-            # ask back before the backend actually renders and pushes a
-            # frame (see ipympl.backend_nbagg.Canvas.send_json /
-            # FigureCanvasWebAggCore.draw_idle). That round trip can stall
-            # under a fast run of Play-widget ticks -- symptom: playback
-            # silently freezes partway through while the Play widget's own
-            # frame counter keeps advancing. draw() renders and pushes
-            # directly, no negotiation with the frontend required. 3D isn't
-            # blitted anyway, so there's no performance cost to going
-            # synchronous (blit() has this same direct-push property, which
-            # is why the 2D path below was never affected).
-            t0 = time.time()
-            fig.canvas.draw()
-            render_time = time.time() - t0
+        push_frame, render_time = _make_live_push(fig)
 
-            def push(f):
-                fig.canvas.draw()
-        else:
-            artists = [a for a in (coll, quiv_holder[0], title) if a is not None]
-            bg = _setup_blit(fig, artists)  # one-time full draw, not timed
-            t0 = time.time()
-            _blit_frame(fig, ax, bg, artists)
-            render_time = time.time() - t0
-
-            def push(f):
-                _blit_frame(fig, ax, bg, [a for a in (coll, quiv_holder[0], title)
-                                          if a is not None])
+        def push(f):
+            push_frame()
 
         display(fig.canvas)
     else:
