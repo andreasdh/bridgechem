@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from . import analysis, constants
 from .box import Box, box
-from .simulation import Simulation
+from .simulation import LiveRun, Simulation
 from .analysis import maxwell_boltzmann_speed, mean_speed, rms_speed
 
 __version__ = "0.1.0"
@@ -33,6 +33,7 @@ __all__ = [
     "box",
     "Box",
     "Simulation",
+    "LiveRun",
     "analysis",
     "constants",
     "maxwell_boltzmann_speed",

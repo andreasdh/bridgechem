@@ -95,6 +95,27 @@ Outside a live kernel (a script, a test, or without `ipympl` installed)
 playback falls back to the old PNG-per-frame approach, which still works
 everywhere -- just without live redraws or rotation.
 
+### Live mode
+
+The default is to compute the whole trajectory first, then play it back --
+which is what makes scrubbing possible (pause and drag back to inspect a
+specific collision). Pass `animate="live"` to `run()` instead to step and
+render together, one frame at a time, as you watch:
+
+```python
+live = system.run(t=500, animate="live")
+live.pause()               # freeze it
+live.resume()              # and continue
+sim = live.simulation      # a normal Simulation over what's been watched so
+                            # far -- calculate()/histogram() work on it as usual
+```
+
+This is necessarily a one-way street while it's running: the `Play` widget
+it shows has no slider, since there's no "go back" for a live physics step.
+Every frame is still recorded as it happens, though, so `.simulation` always
+gives you a full, scrubbable `Simulation` over everything watched so far --
+finished or not.
+
 `run()` still returns a `Simulation` you can analyse:
 
 ```python
@@ -183,7 +204,8 @@ particles bind together) alongside `sim.calculate("temperature")`.
 - **Interactive playback** in Jupyter (live `ipympl` canvas, no HTML file):
   play, pause, and scrub through the trajectory with an `ipywidgets.Play`
   widget, with big, auto-sized particles and optional velocity-vector arrows.
-  A 3D box gets a real, mouse-rotatable 3D scene.
+  A 3D box gets a real, mouse-rotatable 3D scene. `animate="live"` steps and
+  renders together as you watch, instead of precomputing first.
 - Colour particles by instantaneous **speed** or by (fixed) **mass**
   (`color_by="mass"`, after `system.set_mass(...)`).
 - `system.set_mass(mass, indices=...)` to build a mixture -- e.g. a light/heavy

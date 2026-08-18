@@ -567,6 +567,155 @@ def _autoplay_fallback(update, push, n_frames, fps, speed):
 
 
 # --------------------------------------------------------------------------- #
+# live playback: step and render together, as you watch (animate="live")
+# --------------------------------------------------------------------------- #
+def play_live(box, *, dt, steps, sample_every, vectors=False,
+             color_by="speed", fps=15, speed=1.0, display_scale=None,
+             figsize=(6, 6), thermostat=False, T_start=0.0, T_target=0.0,
+             rate=0.0):
+    """Step and render live, one frame at a time -- nothing precomputed.
+
+    Unlike :func:`play`, there's no trajectory to hand in: each displayed
+    frame is ``sample_every`` physics steps run right before it's drawn,
+    using -- and mutating -- the box's *current* live state
+    (``box.pos``/``box.vel``), exactly like :meth:`bridgechem.Box.advance`.
+    ``steps`` is the total step budget for the run (playback stops once
+    reached), matching the ``steps``/``t`` already resolved by
+    :meth:`bridgechem.Box.run`.
+
+    This needs a live Jupyter kernel with ``ipympl`` -- there's no
+    meaningful "replay" fallback for a run that's never actually recorded
+    up front, so this raises rather than silently doing something that
+    wouldn't look live.
+
+    ``thermostat``/``T_start``/``T_target``/``rate`` carry a pending
+    :meth:`bridgechem.Box.set_temperature` ramp through to each
+    :meth:`~bridgechem.Box.advance` call -- so cooling a gas to watch it
+    condense works the same way live as it does precomputed.
+
+    Returns a :class:`bridgechem.simulation.LiveRun` handle: its ``Play``
+    widget is shown *without* a slider (there's no "scrub back" for a live
+    physics step -- only :meth:`~bridgechem.simulation.LiveRun.pause` /
+    :meth:`~bridgechem.simulation.LiveRun.resume`), and ``.simulation``
+    gives a normal :class:`Simulation` over whatever's been recorded so
+    far, at any point, complete with full scrubbing over that recording.
+    """
+    from .simulation import LiveRun
+
+    if not _ensure_interactive_backend():
+        raise RuntimeError(
+            "animate='live' needs a live Jupyter kernel with ipympl "
+            "installed -- there's no meaningful way to stream a live "
+            "simulation into a static image. Use the default precomputed "
+            "mode instead (animate=True), or install ipympl "
+            "(pip install ipympl) and run this in a real notebook kernel."
+        )
+    if color_by not in VALID_COLOR_BY:
+        raise ValueError(f"color_by must be one of {VALID_COLOR_BY}")
+
+    L = np.atleast_1d(np.asarray(box.L, dtype=float))
+    dim = L.size
+    full_3d = dim == 3
+    ds = display_scale if display_scale is not None else box.display_scale
+    n_frames = int(steps) // int(sample_every) + 1
+
+    color_static, vmin, vmax, color_label = None, 0.0, 1.0, ""
+    color_by_render = color_by
+    if color_by == "speed":
+        # No full trajectory to draw the true max from yet, so estimate from
+        # the current speed distribution with generous headroom -- a
+        # heating/cooling run can otherwise saturate or wash out the colour
+        # scale as it goes, since (unlike precomputed playback) this can't
+        # be recalibrated from data that doesn't exist yet.
+        current_speeds = np.sqrt(np.sum(box.vel ** 2, axis=-1))
+        vmax = 2.0 * float(current_speeds.max()) if current_speeds.size else 1.0
+        color_label = "speed (m/s)"
+    elif color_by == "mass":
+        mass_amu = np.asarray(box.mass) / AMU
+        vmin, vmax = float(mass_amu.min()), float(mass_amu.max())
+        color_label = "mass (amu)"
+        if vmin == vmax:
+            color_by_render = None
+        else:
+            color_static = mass_amu
+
+    mean_v = (float(np.sqrt(np.sum(box.vel ** 2, axis=-1)).mean())
+             if box.vel.size else 0.0)
+
+    scene_kwargs = dict(display_scale=ds, vectors=vectors,
+                        color_by=color_by_render, figsize=figsize,
+                        mean_speed=mean_v, color_static=color_static,
+                        vmin=vmin, vmax=vmax, color_label=color_label)
+    if full_3d:
+        fig, ax, coll, quiv, title = _setup_scene_3d(L, box.radius, **scene_kwargs)
+    else:
+        fig, ax, coll, quiv, title = _setup_scene(L, box.radius, **scene_kwargs)
+
+    quiv_holder = [quiv]
+    live_run = LiveRun(box, mass=box.mass, radius=box.radius, L=L,
+                       periodic=box.periodic, display_scale=ds)
+    live_run.pos.append(box.pos.copy())
+    live_run.vel.append(box.vel.copy())
+    live_run.times.append(0.0)
+    live_run.impulse.append(np.zeros(dim))
+    elapsed = [0.0]
+    virial_total = np.zeros(1)
+
+    def render(time_s):
+        if full_3d:
+            quiv_holder[0] = _update_artists_3d(
+                ax, coll, quiv_holder[0], title, box.pos, box.vel,
+                color_by_render, time_s, vectors, mean_v, L)
+        else:
+            _update_artists(coll, quiv_holder[0], title, box.pos, box.vel,
+                            color_by_render, time_s, None)
+
+    render(0.0)
+
+    from IPython.display import display
+    push_frame, render_time = _make_live_push(fig)
+    display(fig.canvas)
+
+    try:
+        import ipywidgets as widgets
+    except ImportError as exc:
+        raise RuntimeError(
+            "animate='live' needs ipywidgets for its Play/Pause control "
+            "(pip install ipywidgets)."
+        ) from exc
+
+    achievable_fps = 0.8 / max(render_time, 1e-3)
+    effective_fps = min(fps, achievable_fps) if fps and fps > 0 else achievable_fps
+    interval_ms = max(1, round(1000.0 / (effective_fps * max(speed, 1e-9))))
+    play_widget = widgets.Play(min=0, max=n_frames - 1, step=1,
+                               interval=interval_ms, value=0, repeat=False)
+    live_run._play_widget = play_widget
+
+    def on_change(change):
+        f = change["new"]
+        frame_impulse = np.zeros(dim)
+        box.advance(dt=dt, steps=sample_every, impulse=frame_impulse,
+                    virial=virial_total, thermostat=thermostat,
+                    T_start=T_start, T_target=T_target, rate=rate,
+                    t_elapsed=elapsed[0])
+        elapsed[0] += dt * sample_every
+        live_run.pos.append(box.pos.copy())
+        live_run.vel.append(box.vel.copy())
+        live_run.times.append(elapsed[0])
+        live_run.impulse.append(frame_impulse)
+        live_run.virial = float(virial_total[0])
+        render(elapsed[0])
+        push_frame()
+        if f >= n_frames - 1:
+            play_widget.playing = False
+            live_run.finished = True
+
+    play_widget.observe(on_change, names="value")
+    display(play_widget)
+    return live_run
+
+
+# --------------------------------------------------------------------------- #
 # static histogram vs Maxwell-Boltzmann
 # --------------------------------------------------------------------------- #
 def histogram(speeds_array, *, temperature_K=None, mass_kg=None, dim=2,
