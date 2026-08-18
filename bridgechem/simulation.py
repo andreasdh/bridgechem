@@ -257,3 +257,81 @@ class Simulation:
     def __repr__(self):
         return (f"<Simulation {self.dim}D N={self.n_particles} "
                 f"frames={self.n_frames} t={self.total_time * 1e12:.2f} ps>")
+
+
+class LiveRun:
+    """Handle for a run started with ``animate="live"``.
+
+    Physics and rendering happen together, one frame at a time, as you watch
+    -- instead of the whole trajectory being computed up front and then
+    played back. That's necessarily a one-way street while it's running: the
+    ``Play`` widget it displays has no slider, because there's no "go back"
+    for a live physics step the way there is for scrubbing a recording.
+
+    Every frame *is* still recorded as it happens, though, so once it's
+    finished (or you call :meth:`stop` early) ``.simulation`` gives you a
+    normal :class:`Simulation` over everything watched so far -- the same
+    ``calculate()``/``histogram()``/``show()`` (with full scrubbing, on the
+    now-recorded trajectory) as any other run.
+    """
+
+    def __init__(self, box, *, mass, radius, L, periodic, display_scale):
+        self._box = box
+        self._play_widget = None  # set by viz.play_live once it exists
+        self.mass = np.asarray(mass)
+        self.radius = np.asarray(radius)
+        self.L = np.asarray(L, dtype=float)
+        self.periodic = periodic
+        self.display_scale = float(display_scale)
+        self.pos = []       # list of (N, dim) arrays, one per recorded frame
+        self.vel = []
+        self.times = []
+        self.impulse = []   # list of (dim,) arrays, wall impulse per frame
+        self.virial = 0.0   # running total, kg m**2/s
+        self.finished = False
+
+    @property
+    def playing(self) -> bool:
+        return bool(self._play_widget.playing) if self._play_widget else False
+
+    def pause(self):
+        """Stop advancing (everything recorded so far stays available)."""
+        if self._play_widget is not None:
+            self._play_widget.playing = False
+        return self
+
+    def resume(self):
+        """Resume advancing after :meth:`pause`."""
+        if self._play_widget is not None and not self.finished:
+            self._play_widget.playing = True
+        return self
+
+    def stop(self):
+        """Stop for good. Unlike :meth:`pause`, playback can't resume."""
+        self.pause()
+        self.finished = True
+        return self
+
+    @property
+    def n_frames(self) -> int:
+        return len(self.times)
+
+    @property
+    def simulation(self) -> Simulation:
+        """A normal :class:`Simulation` over everything recorded so far."""
+        n = self.n_frames
+        dim = self.L.size
+        impulse = (np.array(self.impulse) if self.impulse
+                  else np.zeros((n, dim)))
+        return Simulation(
+            np.array(self.pos), np.array(self.vel), np.array(self.times),
+            impulse, self.virial,
+            mass=self.mass, radius=self.radius, L=self.L,
+            periodic=self.periodic, display_scale=self.display_scale,
+        )
+
+    def __repr__(self):
+        state = "finished" if self.finished else (
+            "playing" if self.playing else "paused")
+        return (f"<LiveRun {self.L.size}D N={len(self.mass)} "
+                f"frames={self.n_frames} {state}>")

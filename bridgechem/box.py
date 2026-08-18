@@ -295,7 +295,9 @@ class Box:
         return safety * rmin / vmax
 
     # -- live stepping (loop-style API) ------------------------------------
-    def advance(self, dt=None, steps=1):
+    def advance(self, dt=None, steps=1, impulse=None, virial=None, *,
+                thermostat=False, T_start=0.0, T_target=0.0, rate=0.0,
+                t_elapsed=0.0):
         """Advance the live system state in place by ``steps`` steps.
 
         Enables the explicit-loop style::
@@ -303,27 +305,50 @@ class Box:
             while t < t_end:
                 system.advance()
                 t += system.last_dt
+
+        ``impulse`` (``(dim,)``) and ``virial`` (``(1,)``) are optional
+        accumulator arrays -- pass your own to have this batch's wall
+        impulse / collisional virial added into them in place (used by live
+        playback, see :class:`bridgechem.simulation.LiveRun`, to keep
+        pressure measurable from a run that was never fully precomputed).
+        Left as fresh zero arrays if omitted, matching the original
+        behaviour: computed, then discarded.
+
+        The ``thermostat``/``T_start``/``T_target``/``rate``/``t_elapsed``
+        arguments mirror :meth:`set_temperature`'s ramp (used internally by
+        live playback to honour a pending thermostat across many ``advance``
+        calls); ``t_elapsed`` is the simulation time already elapsed *since
+        the thermostat started*, so the ramp continues correctly across
+        calls rather than restarting each time.
         """
         if dt is None:
             dt = self._auto_dt()
         self.last_dt = dt
-        impulse = np.zeros(self.dim)
-        virial = np.zeros(1)
+        if impulse is None:
+            impulse = np.zeros(self.dim)
+        if virial is None:
+            virial = np.zeros(1)
         if self._has_interactions:
             ia = self._interaction
             forces = np.zeros((self.N, self.dim))
             kernels._lj_forces(self.pos, self.L, self.periodic,
                                ia["epsilon"], ia["sigma"] ** 2, ia["r_cut2"],
                                ia["u_shift"], forces)
-            for _ in range(int(steps)):
+            for i in range(1, int(steps) + 1):
                 kernels._step_lj(self.pos, self.vel, forces, self.radius,
                                  self.inv_mass, self.L, dt,
                                  self.periodic, ia["epsilon"], ia["sigma"] ** 2,
                                  ia["r_cut2"], ia["u_shift"], impulse, virial)
+                if thermostat:
+                    kernels._apply_thermostat(self.vel, self.inv_mass, T_start,
+                                              T_target, rate, t_elapsed + i * dt)
         else:
-            for _ in range(int(steps)):
+            for i in range(1, int(steps) + 1):
                 kernels._step(self.pos, self.vel, self.radius, self.inv_mass,
                               self.L, dt, self.periodic, impulse, virial)
+                if thermostat:
+                    kernels._apply_thermostat(self.vel, self.inv_mass, T_start,
+                                              T_target, rate, t_elapsed + i * dt)
         return self
 
     # ``integrate`` is kept as an alias so the loop sketch in the design notes
@@ -362,9 +387,18 @@ class Box:
             "velocity-verlet" once :meth:`add_interactions` has been called
             (required, since forces need integrating), "hard-sphere"
             otherwise.
-        animate : bool, optional
+        animate : bool or "live", optional
             Display the trajectory with play/pause controls. Defaults to True
-            inside a notebook, False otherwise.
+            inside a notebook, False otherwise. Pass ``"live"`` to step and
+            render together, one frame at a time as you watch, instead of
+            precomputing the whole trajectory first -- needs a live Jupyter
+            kernel with ``ipympl``. Returns a
+            :class:`~bridgechem.simulation.LiveRun` instead of a
+            :class:`Simulation` in that case: ``.pause()``/``.resume()``
+            control it (no scrubbing -- there's no "go back" for a live
+            physics step), and ``.simulation`` gives a normal
+            :class:`Simulation` over whatever's been recorded so far, at
+            any point.
         vectors : bool
             Draw a velocity arrow on each particle.
         color_by : None, "speed" or "mass"
@@ -415,6 +449,16 @@ class Box:
         T_start = th["T_start"] if thermostat else 0.0
         T_target = th["T_target"] if thermostat else 0.0
         rate = th["rate"] if thermostat else 0.0
+
+        if animate == "live":
+            self._thermostat = None  # consumed: baked into play_live's closure
+            return viz.play_live(
+                self, dt=dt, steps=steps, sample_every=sample_every,
+                vectors=vectors, color_by=color_by, fps=fps, speed=speed,
+                display_scale=display_scale, figsize=figsize,
+                thermostat=thermostat, T_start=T_start, T_target=T_target,
+                rate=rate,
+            )
 
         if self._has_interactions:
             ia = self._interaction

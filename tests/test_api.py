@@ -93,6 +93,40 @@ def test_advance_steps_live_state():
     assert np.max(np.abs(system.pos - pos_before)) > 1e-12
 
 
+def test_advance_accumulates_into_given_impulse_and_virial():
+    # used by live playback (viz.play_live) to keep pressure measurable from
+    # a run that's never fully precomputed
+    system = bc.box(N=80, size=(20, 20), temperature=300, seed=0)
+    impulse = np.zeros(system.dim)
+    virial = np.zeros(1)
+    system.advance(steps=200, impulse=impulse, virial=virial)
+    assert np.any(impulse != 0.0)  # some particle bounced off a wall
+    assert virial[0] != 0.0        # some particle-particle collision happened
+
+
+def test_advance_without_accumulators_matches_original_behaviour():
+    # default (no impulse/virial passed) must still work: computed, discarded
+    system = bc.box(N=30, size=(20, 20), seed=0)
+    pos_before = system.pos.copy()
+    system.advance(steps=10)
+    assert np.max(np.abs(system.pos - pos_before)) > 1e-12
+
+
+def test_advance_thermostat_ramps_temperature_across_repeated_calls():
+    system = bc.box(N=60, size=(15, 15), temperature=300, seed=0)
+    T0 = system.temperature_now()
+    assert np.isclose(T0, 300.0, rtol=0.05)
+
+    dt = system._auto_dt()
+    elapsed = 0.0
+    for _ in range(20):
+        system.advance(dt=dt, steps=50, thermostat=True, T_start=300.0,
+                       T_target=100.0, rate=0.0, t_elapsed=elapsed)
+        elapsed += dt * 50
+    assert system.temperature_now() < T0
+    assert np.isclose(system.temperature_now(), 100.0, rtol=0.05)
+
+
 def test_add_interactions_switches_engine():
     # full functional coverage lives in tests/test_lj.py
     system = bc.box(N=10, size=(20, 20))

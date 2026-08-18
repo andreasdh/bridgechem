@@ -70,6 +70,30 @@ def test_scene_builds_and_updates_3d():
     matplotlib.pyplot.close(fig)
 
 
+def test_scene_3d_draws_a_colorbar_when_color_by_is_set():
+    # Regression: the 3D scene builder forgot fig.colorbar() entirely, so
+    # the speed/mass colour scale was silently missing from every 3D plot.
+    system = bc.box(N=20, size=(15, 15, 15), seed=0)
+    fig, ax, coll, quiv, title = viz._setup_scene_3d(
+        system.L, system.radius, system.display_scale,
+        vectors=False, color_by="speed", figsize=(4, 4), mean_speed=300.0,
+        vmax=750.0, color_label="speed (m/s)",
+    )
+    assert len(fig.axes) == 2  # the 3D axes plus a colorbar axes
+    assert fig.axes[1].get_ylabel() == "speed (m/s)"
+    matplotlib.pyplot.close(fig)
+
+
+def test_scene_3d_has_no_colorbar_when_color_by_is_none():
+    system = bc.box(N=20, size=(15, 15, 15), seed=0)
+    fig, ax, coll, quiv, title = viz._setup_scene_3d(
+        system.L, system.radius, system.display_scale,
+        vectors=False, color_by=None, figsize=(4, 4), mean_speed=300.0,
+    )
+    assert len(fig.axes) == 1
+    matplotlib.pyplot.close(fig)
+
+
 def test_is_live_backend_detects_known_live_backends(monkeypatch):
     import matplotlib as mpl
     for name in ("module://ipympl.backend_nbagg", "nbAgg", "WebAgg"):
@@ -270,3 +294,55 @@ def test_run_higher_speed_gives_fewer_frames():
         steps=6000, animate=False, speed=0.3)
     fast_sim = system.run(steps=6000, animate=False, speed=3.0)
     assert fast_sim.n_frames < slow_sim.n_frames
+
+
+# --------------------------------------------------------------------------- #
+# live mode (animate="live")
+# --------------------------------------------------------------------------- #
+def test_play_live_requires_a_live_backend():
+    # Under pytest in_notebook() is always False, so there's no meaningful
+    # way to stream a live simulation -- this must raise clearly rather than
+    # silently doing something that wouldn't actually be live.
+    system = bc.box(N=20, size=(15, 15), seed=0)
+    with pytest.raises(RuntimeError, match="live Jupyter kernel"):
+        viz.play_live(system, dt=system._auto_dt(), steps=1000,
+                      sample_every=100)
+
+
+def test_run_animate_live_requires_a_live_backend():
+    system = bc.box(N=20, size=(15, 15), seed=0)
+    with pytest.raises(RuntimeError, match="live Jupyter kernel"):
+        system.run(steps=1000, animate="live")
+
+
+def test_live_run_simulation_property_over_recorded_frames():
+    from bridgechem.simulation import LiveRun
+
+    system = bc.box(N=20, size=(15, 15), seed=0)
+    live = LiveRun(system, mass=system.mass, radius=system.radius,
+                   L=system.L, periodic=system.periodic, display_scale=1.0)
+    for f in range(5):
+        live.pos.append(system.pos.copy())
+        live.vel.append(system.vel.copy())
+        live.times.append(f * 1e-13)
+        live.impulse.append(np.zeros(system.dim))
+        system.advance(steps=50)
+
+    sim = live.simulation
+    assert isinstance(sim, bc.Simulation)
+    assert sim.n_frames == 5
+    assert sim.pos.shape[1:] == (20, 2)
+
+
+def test_live_run_pause_resume_stop_without_a_widget():
+    # Constructing a LiveRun directly (no viz.play_live involved) leaves
+    # _play_widget unset -- pause/resume/stop must stay no-ops, not crash.
+    from bridgechem.simulation import LiveRun
+
+    system = bc.box(N=10, size=(15, 15), seed=0)
+    live = LiveRun(system, mass=system.mass, radius=system.radius,
+                   L=system.L, periodic=system.periodic, display_scale=1.0)
+    assert live.playing is False
+    live.pause().resume()
+    live.stop()
+    assert live.finished is True
